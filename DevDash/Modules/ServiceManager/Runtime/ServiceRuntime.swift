@@ -215,6 +215,19 @@ class ServiceRuntime: ObservableObject, Identifiable, Hashable, OutputViewDataSo
         if isRunning { return }
 
         processingAction = .starting
+        startServiceProcess()
+    }
+
+    // Internal start helper that doesn't set processingAction (for restart)
+    private func startWithoutProcessingAction() async {
+        await MainActor.run {
+            if self.isRunning { return }
+        }
+        startServiceProcess()
+    }
+
+    // Core service start logic (shared by start() and restart())
+    private func startServiceProcess() {
         logs = ""
         logLines = []
         errors = []
@@ -396,16 +409,19 @@ class ServiceRuntime: ObservableObject, Identifiable, Hashable, OutputViewDataSo
                         self.process = nil
                         self.isRunning = false
                     }
-                    self.processingAction = nil
+                    // Only clear processingAction if this is an unexpected termination
+                    // If we're in a controlled stop/restart, verification will clear it
+                    if self.processingAction != .stopping && self.processingAction != .restarting {
+                        self.processingAction = nil
+                    }
                 }
             }
 
             do {
                 try process.run()
-                await MainActor.run {
-                    self.isRunning = true
-                    self.processingAction = nil
-                }
+                // Don't set isRunning immediately - let verification confirm it
+                // Verification will also clear processingAction
+                await verifyStarted()
             } catch {
                 await MainActor.run {
                     self.logs += "Failed to start process: \(error.localizedDescription)\n"
@@ -482,6 +498,10 @@ class ServiceRuntime: ObservableObject, Identifiable, Hashable, OutputViewDataSo
                         if running && ownedProcess == nil {
                             self.isExternallyManaged = true
                             self.isRunning = true
+                        } else if running && ownedProcess != nil {
+                            // We own the process and it's running
+                            self.isExternallyManaged = false
+                            self.isRunning = true
                         } else if !running {
                             self.isExternallyManaged = false
                             self.isRunning = ownedProcess?.isRunning ?? false
@@ -514,10 +534,18 @@ class ServiceRuntime: ObservableObject, Identifiable, Hashable, OutputViewDataSo
                             // Port is in use by external process
                             self.isExternallyManaged = true
                             self.isRunning = true
+                        } else if pid != nil && ownedProcess != nil {
+                            // We own the process and port is in use (success!)
+                            self.isExternallyManaged = false
+                            self.isRunning = true
                         } else if pid == nil && ownedProcess == nil {
                             // Port is free and we don't own the process - service is stopped
                             self.isExternallyManaged = false
                             self.isRunning = false
+                        } else if pid == nil && ownedProcess != nil {
+                            // We own a process but port is free - process may not have started yet
+                            self.isExternallyManaged = false
+                            self.isRunning = ownedProcess?.isRunning ?? false
                         }
                         self.logs += "[Check] Port \(port) is \(pid != nil ? "in use by PID \(pid!)" : "free")\n"
                     }
@@ -587,10 +615,8 @@ class ServiceRuntime: ObservableObject, Identifiable, Hashable, OutputViewDataSo
             // Use the async version for actual stop logic
             await stopAsync()
 
-            // Clear processing action when done
-            await MainActor.run {
-                self.processingAction = nil
-            }
+            // Verify the service actually stopped
+            await verifyStopped()
         }
     }
 
@@ -603,7 +629,8 @@ class ServiceRuntime: ObservableObject, Identifiable, Hashable, OutputViewDataSo
                 let output = await runShellCommand(restartCmd)
                 if !output.isEmpty { logs += output }
                 logs += "[Restart] Command completed\n"
-                processingAction = nil
+                // Verify the service restarted successfully
+                await verifyStarted()
             }
         } else {
             // No custom restart command - stop then start with proper sequencing
@@ -615,10 +642,11 @@ class ServiceRuntime: ObservableObject, Identifiable, Hashable, OutputViewDataSo
                 // Wait a bit for process to fully terminate
                 try? await Task.sleep(nanoseconds: 500_000_000)
 
-                // Start the service
-                start()
+                // Start the service (without setting processingAction since we already have .restarting)
+                await startWithoutProcessingAction()
 
-                // processingAction will be cleared by start() on success/failure
+                // Verify the service started successfully
+                await verifyStarted()
             }
         }
     }
@@ -639,8 +667,7 @@ class ServiceRuntime: ObservableObject, Identifiable, Hashable, OutputViewDataSo
             await MainActor.run {
                 if !output.isEmpty { self.logs += output }
                 self.process = nil
-                self.isRunning = false
-                self.isExternallyManaged = false
+                // Don't set isRunning here - let verification confirm
             }
             return
         }
@@ -652,8 +679,7 @@ class ServiceRuntime: ObservableObject, Identifiable, Hashable, OutputViewDataSo
             proc.terminate()
             await MainActor.run {
                 self.process = nil
-                self.isRunning = false
-                self.isExternallyManaged = false
+                // Don't set isRunning here - let verification confirm
             }
             // Wait and force kill if needed
             try? await Task.sleep(nanoseconds: 500_000_000)
@@ -677,9 +703,8 @@ class ServiceRuntime: ObservableObject, Identifiable, Hashable, OutputViewDataSo
                     self.logs += "[Stop] No process found on port \(port)\n"
                 }
             }
+            // Don't set isRunning here - let verification confirm
             await MainActor.run {
-                self.isRunning = false
-                self.isExternallyManaged = false
                 self.hasPortConflict = false
                 self.conflictingPID = nil
             }
@@ -747,6 +772,33 @@ class ServiceRuntime: ObservableObject, Identifiable, Hashable, OutputViewDataSo
                 return "Failed: \(error.localizedDescription)\n"
             }
         }.value
+    }
+
+    // MARK: - Verification Methods
+
+    /// Verify service started successfully (wait + check status)
+    private func verifyStarted() async {
+        // Wait for process to initialize
+        try? await Task.sleep(nanoseconds: 500_000_000)
+
+        // Check actual status
+        await checkStatus()
+
+        // Clear processing action after verification
+        await MainActor.run {
+            self.processingAction = nil
+        }
+    }
+
+    /// Verify service stopped successfully
+    private func verifyStopped() async {
+        // Check actual status
+        await checkStatus()
+
+        // Clear processing action after verification
+        await MainActor.run {
+            self.processingAction = nil
+        }
     }
 
     // MARK: - Public Methods
