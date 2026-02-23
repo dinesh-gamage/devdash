@@ -534,25 +534,42 @@ class ServiceRuntime: ObservableObject, Identifiable, Hashable, OutputViewDataSo
 
     // Kill conflicting process and restart
     func killAndRestart() {
-        guard let pid = conflictingPID else { return }
         processingAction = .killingAndRestarting
+
         Task {
-            let success = await Task.detached(priority: .userInitiated) { () -> Bool in
-                let task = Process()
-                task.executableURL = URL(fileURLWithPath: "/bin/kill")
-                task.arguments = ["-9", "\(pid)"]
-                do { try task.run(); task.waitUntilExit(); return true }
-                catch { return false }
-            }.value
+            // First try to use conflictingPID if available, otherwise find via port
+            let targetPID: Int?
+            if let conflicting = conflictingPID {
+                targetPID = conflicting
+            } else if let port = config.port {
+                targetPID = await findPIDForPort(port)
+            } else {
+                targetPID = nil
+            }
+
+            guard let pid = targetPID else {
+                logs += "[Kill & Start] No process found to kill\n"
+                processingAction = nil
+                return
+            }
+
+            // Kill the process using helper
+            let success = await killProcess(pid)
 
             if success {
                 hasPortConflict = false
                 conflictingPID = nil
-                logs += "\n[Killed process \(pid)]\n"
+                isExternallyManaged = false
+                logs += "[Kill & Start] Killed process \(pid)\n"
+
+                // Wait for process to fully terminate
                 try? await Task.sleep(nanoseconds: 500_000_000)
+
+                // Start the service
                 start()
+                // processingAction will be cleared by start()
             } else {
-                logs += "Failed to kill process \(pid)\n"
+                logs += "[Kill & Start] Failed to kill process \(pid)\n"
                 processingAction = nil
             }
         }
@@ -565,101 +582,16 @@ class ServiceRuntime: ObservableObject, Identifiable, Hashable, OutputViewDataSo
         prerequisiteTask = nil
 
         processingAction = .stopping
-        stopFlushTimer()
 
-        // Clean up readability handler
-        pipe?.fileHandleForReading.readabilityHandler = nil
+        Task {
+            // Use the async version for actual stop logic
+            await stopAsync()
 
-        let config = self.config
-
-        // Case 1: custom stop command
-        if let stopCmd = config.stopCommand, !stopCmd.isEmpty {
-            Task {
-                let output = await Task.detached(priority: .userInitiated) { () -> String in
-                    let task = Process()
-                    task.executableURL = URL(fileURLWithPath: "/bin/zsh")
-                    task.arguments = ["-c", stopCmd]
-                    task.currentDirectoryURL = URL(fileURLWithPath: config.workingDirectory)
-                    task.environment = ProcessEnvironment.shared.getEnvironment(additionalVars: config.environment)
-                    let pipe = Pipe()
-                    task.standardOutput = pipe
-                    task.standardError = pipe
-                    do {
-                        try task.run(); task.waitUntilExit()
-                        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                        return String(data: data, encoding: .utf8) ?? ""
-                    } catch { return "[Stop] Failed: \(error.localizedDescription)\n" }
-                }.value
-                if !output.isEmpty { logs += output }
-                process = nil
-                isRunning = false
-                isExternallyManaged = false
-                processingAction = nil
+            // Clear processing action when done
+            await MainActor.run {
+                self.processingAction = nil
             }
-            return
         }
-
-        // Case 2: we own the process
-        if let proc = process {
-            let pid = proc.processIdentifier
-            proc.terminate()
-            process = nil
-            isRunning = false
-            isExternallyManaged = false
-            processingAction = nil
-            Task {
-                try? await Task.sleep(nanoseconds: 500_000_000)
-                let stillRunning = await Task.detached(priority: .userInitiated) { proc.isRunning }.value
-                if stillRunning {
-                    let killTask = Process()
-                    killTask.executableURL = URL(fileURLWithPath: "/bin/kill")
-                    killTask.arguments = ["-9", "\(pid)"]
-                    try? killTask.run()
-                }
-            }
-            return
-        }
-
-        // Case 3: externally managed — use port-based PID kill
-        if let port = config.port {
-            Task {
-                let pid = await Task.detached(priority: .userInitiated) { () -> Int? in
-                    let task = Process()
-                    task.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
-                    task.arguments = ["-i", ":\(port)", "-t"]
-                    let pipe = Pipe()
-                    task.standardOutput = pipe
-                    try? task.run(); task.waitUntilExit()
-                    let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                    let trimmed = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                    return trimmed.components(separatedBy: .newlines).first.flatMap { Int($0) }
-                }.value
-
-                if let pid {
-                    let killed = await Task.detached(priority: .userInitiated) { () -> Bool in
-                        let killTask = Process()
-                        killTask.executableURL = URL(fileURLWithPath: "/bin/kill")
-                        killTask.arguments = ["-9", "\(pid)"]
-                        do { try killTask.run(); killTask.waitUntilExit(); return true }
-                        catch { return false }
-                    }.value
-                    logs += killed ? "[Stop] Killed external process \(pid) on port \(port)\n"
-                                   : "[Stop] Failed to kill external process \(pid)\n"
-                } else {
-                    logs += "[Stop] No process found on port \(port)\n"
-                }
-                isRunning = false
-                isExternallyManaged = false
-                hasPortConflict = false
-                conflictingPID = nil
-                processingAction = nil
-            }
-            return
-        }
-
-        // Case 4: no way to stop
-        logs += "[Stop] Cannot stop: no stop command or port configured\n"
-        processingAction = nil
     }
 
     // Restart the service
@@ -668,33 +600,156 @@ class ServiceRuntime: ObservableObject, Identifiable, Hashable, OutputViewDataSo
         if let restartCmd = config.restartCommand, !restartCmd.isEmpty {
             processingAction = .restarting
             Task {
-                let output = await Task.detached(priority: .userInitiated) { () -> String in
-                    let task = Process()
-                    task.executableURL = URL(fileURLWithPath: "/bin/zsh")
-                    task.arguments = ["-c", restartCmd]
-                    task.currentDirectoryURL = URL(fileURLWithPath: config.workingDirectory)
-                    task.environment = ProcessEnvironment.shared.getEnvironment(additionalVars: config.environment)
-                    let pipe = Pipe()
-                    task.standardOutput = pipe
-                    task.standardError = pipe
-                    do {
-                        try task.run(); task.waitUntilExit()
-                        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                        return String(data: data, encoding: .utf8) ?? ""
-                    } catch { return "[Restart] Failed: \(error.localizedDescription)\n" }
-                }.value
+                let output = await runShellCommand(restartCmd)
                 if !output.isEmpty { logs += output }
                 logs += "[Restart] Command completed\n"
                 processingAction = nil
             }
         } else {
-            stop()
+            // No custom restart command - stop then start with proper sequencing
+            processingAction = .restarting
             Task {
+                // Stop the service and wait for completion
+                await stopAsync()
+
+                // Wait a bit for process to fully terminate
                 try? await Task.sleep(nanoseconds: 500_000_000)
+
+                // Start the service
                 start()
+
+                // processingAction will be cleared by start() on success/failure
             }
         }
     }
+
+    // Async version of stop for proper sequencing
+    private func stopAsync() async {
+        await MainActor.run {
+            // Don't set processingAction here - caller manages it
+            self.stopFlushTimer()
+            self.pipe?.fileHandleForReading.readabilityHandler = nil
+        }
+
+        let config = self.config
+
+        // Case 1: custom stop command
+        if let stopCmd = config.stopCommand, !stopCmd.isEmpty {
+            let output = await runShellCommand(stopCmd)
+            await MainActor.run {
+                if !output.isEmpty { self.logs += output }
+                self.process = nil
+                self.isRunning = false
+                self.isExternallyManaged = false
+            }
+            return
+        }
+
+        // Case 2: we own the process
+        let ownedProcess = await MainActor.run { self.process }
+        if let proc = ownedProcess {
+            let pid = proc.processIdentifier
+            proc.terminate()
+            await MainActor.run {
+                self.process = nil
+                self.isRunning = false
+                self.isExternallyManaged = false
+            }
+            // Wait and force kill if needed
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            let stillRunning = await Task.detached(priority: .userInitiated) { proc.isRunning }.value
+            if stillRunning {
+                _ = await killProcess(Int(pid))
+            }
+            return
+        }
+
+        // Case 3: externally managed — use port-based PID kill
+        if let port = config.port {
+            if let pid = await findPIDForPort(port) {
+                let killed = await killProcess(pid)
+                await MainActor.run {
+                    self.logs += killed ? "[Stop] Killed external process \(pid) on port \(port)\n"
+                                       : "[Stop] Failed to kill external process \(pid)\n"
+                }
+            } else {
+                await MainActor.run {
+                    self.logs += "[Stop] No process found on port \(port)\n"
+                }
+            }
+            await MainActor.run {
+                self.isRunning = false
+                self.isExternallyManaged = false
+                self.hasPortConflict = false
+                self.conflictingPID = nil
+            }
+            return
+        }
+
+        // Case 4: no way to stop
+        await MainActor.run {
+            self.logs += "[Stop] Cannot stop: no stop command or port configured\n"
+        }
+    }
+
+    // MARK: - Private Helper Methods
+
+    /// Find process ID listening on a specific port using lsof
+    private func findPIDForPort(_ port: Int) async -> Int? {
+        await Task.detached(priority: .userInitiated) { () -> Int? in
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
+            task.arguments = ["-i", ":\(port)", "-t"]
+            let pipe = Pipe()
+            task.standardOutput = pipe
+            try? task.run()
+            task.waitUntilExit()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            let trimmed = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return trimmed.components(separatedBy: .newlines).first.flatMap { Int($0) }
+        }.value
+    }
+
+    /// Kill a process by PID using SIGKILL
+    private func killProcess(_ pid: Int) async -> Bool {
+        await Task.detached(priority: .userInitiated) { () -> Bool in
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: "/bin/kill")
+            task.arguments = ["-9", "\(pid)"]
+            do {
+                try task.run()
+                task.waitUntilExit()
+                return true
+            } catch {
+                return false
+            }
+        }.value
+    }
+
+    /// Run a shell command and return its output
+    private func runShellCommand(_ command: String) async -> String {
+        let config = self.config
+        return await Task.detached(priority: .userInitiated) { () -> String in
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: "/bin/zsh")
+            task.arguments = ["-c", command]
+            task.currentDirectoryURL = URL(fileURLWithPath: config.workingDirectory)
+            task.environment = ProcessEnvironment.shared.getEnvironment(additionalVars: config.environment)
+            let pipe = Pipe()
+            task.standardOutput = pipe
+            task.standardError = pipe
+            do {
+                try task.run()
+                task.waitUntilExit()
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                return String(data: data, encoding: .utf8) ?? ""
+            } catch {
+                return "Failed: \(error.localizedDescription)\n"
+            }
+        }.value
+    }
+
+    // MARK: - Public Methods
 
     // Clear errors
     func clearErrors() {

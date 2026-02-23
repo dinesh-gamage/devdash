@@ -33,11 +33,8 @@ struct ServiceDetailView: View {
                         .disabled(service.processingAction != nil)
 
                         if service.isExternallyManaged {
-                            VariantButton("Kill & Start", variant: .danger, isLoading: service.processingAction == .stopping) {
-                                service.stop()
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                                    service.start()
-                                }
+                            VariantButton("Kill & Start", variant: .danger, isLoading: service.processingAction == .killingAndRestarting) {
+                                service.killAndRestart()
                             }
                             .disabled(service.processingAction != nil)
                         }
