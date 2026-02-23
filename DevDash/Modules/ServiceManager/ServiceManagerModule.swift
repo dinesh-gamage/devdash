@@ -128,6 +128,7 @@ struct ServiceManagerSidebarView: View {
                         ServiceListItem(
                             serviceInfo: serviceInfo,
                             isSelected: state.selectedService?.id == serviceInfo.id,
+                            manager: state.manager,
                             onDelete: {
                                 // Get full runtime for deletion
                                 if let runtime = state.manager.getRuntime(id: serviceInfo.id) {
