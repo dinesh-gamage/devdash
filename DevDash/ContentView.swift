@@ -262,36 +262,38 @@ struct DashboardView: View {
                 .padding(.horizontal, 20)
                 .padding(.top, 20)
 
-                // Count Widgets
-                HStack(spacing: 12) {
-                    ServiceCountWidget()
-                    EC2CountWidget()
-                    CredentialsCountWidget()
-                    AWSVaultCountWidget()
-                }
-                .padding(.horizontal, 20)
-
-                // Two-column layout: Left (existing widgets) + Right (resource monitor)
+                // Two-column layout: Left (count widgets + existing widgets) + Right (resource monitor)
                 HStack(alignment: .top, spacing: 20) {
-                    // Left column: Existing widgets
+                    // Left column: Count widgets + Existing widgets
                     VStack(alignment: .leading, spacing: 20) {
-                        // Service Manager Widget
-                        ServiceDashboardWidget(
-                            onModuleTap: { onSelectModule("service-manager") }
-                        )
+                        // Count Widgets
+                        HStack(spacing: 12) {
+                            ServiceCountWidget()
+                            EC2CountWidget()
+                            CredentialsCountWidget()
+                            AWSVaultCountWidget()
+                        }
 
-                        // EC2 Manager Widget
-                        EC2DashboardWidget(
-                            onModuleTap: { onSelectModule("ec2-manager") }
-                        )
+                        HStack(spacing: 12) {
+                            // Service Manager Widget
+                            ServiceDashboardWidget(
+                                onModuleTap: { onSelectModule("service-manager") }
+                            )
+
+                            // EC2 Manager Widget
+                            EC2DashboardWidget(
+                                onModuleTap: { onSelectModule("ec2-manager") }
+                            )
+                        }
                     }
                     .frame(maxWidth: .infinity)
 
                     // Right column: Resource Monitor
                     VStack(alignment: .leading, spacing: 20) {
                         ResourceMonitorWidget()
+                            .frame(maxHeight: .infinity, alignment: .top)
                     }
-                    .frame(maxWidth: .infinity)
+                    .frame(maxWidth: 300)
                 }
                 .padding(.horizontal, 20)
                 .padding(.bottom, 20)

@@ -58,10 +58,23 @@ class SystemMetricsMonitor: ObservableObject {
             return
         }
 
+        // Swap is optional - fallback to zeros if unavailable
+        let swap = getSwapUsage() ?? (used: 0.0, total: 0.0)
+
+        // Network and disk (optional - fallback to zeros for now)
+        let network = getNetworkUsage() ?? (download: 0.0, upload: 0.0)
+        let disk = getDiskUsage() ?? (read: 0.0, write: 0.0)
+
         let newMetrics = SystemMetrics(
             cpuUsagePercent: cpu,
             memoryUsedGB: memory.used,
-            memoryTotalGB: memory.total
+            memoryTotalGB: memory.total,
+            swapUsedGB: swap.used,
+            swapTotalGB: swap.total,
+            networkDownloadMBps: network.download,
+            networkUploadMBps: network.upload,
+            diskReadMBps: disk.read,
+            diskWriteMBps: disk.write
         )
 
         // Only publish if significant change
@@ -75,8 +88,9 @@ class SystemMetricsMonitor: ObservableObject {
 
         let cpuDelta = abs(newMetrics.cpuUsagePercent - current.cpuUsagePercent)
         let memoryDelta = abs(newMetrics.memoryUsagePercent - current.memoryUsagePercent)
+        let swapDelta = abs(newMetrics.swapUsagePercent - current.swapUsagePercent)
 
-        return cpuDelta >= changeThreshold || memoryDelta >= changeThreshold
+        return cpuDelta >= changeThreshold || memoryDelta >= changeThreshold || swapDelta >= changeThreshold
     }
 
     // MARK: - Memory Usage (via host_statistics64)
@@ -189,4 +203,49 @@ class SystemMetricsMonitor: ObservableObject {
 
         return cpuPercent
     }
+
+    // MARK: - Swap Usage (via sysctl vm.swapusage)
+
+    private func getSwapUsage() -> (used: Double, total: Double)? {
+        // Define xsw_usage struct matching C struct from sys/sysctl.h
+        var swapUsage = xsw_usage(xsu_total: 0, xsu_avail: 0, xsu_used: 0, xsu_pagesize: 0, xsu_encrypted: 0)
+        var size = MemoryLayout<xsw_usage>.size
+
+        let result = sysctlbyname("vm.swapusage", &swapUsage, &size, nil, 0)
+
+        guard result == 0 else { return nil }
+
+        let usedGB = Double(swapUsage.xsu_used) / 1_073_741_824.0  // Convert to GB
+        let totalGB = Double(swapUsage.xsu_total) / 1_073_741_824.0
+
+        return (used: usedGB, total: totalGB)
+    }
+
+    // MARK: - Network Usage (via sysctl NET_RT_IFLIST2)
+
+    private func getNetworkUsage() -> (download: Double, upload: Double)? {
+        // TODO: Implement network monitoring with NET_RT_IFLIST2
+        // For now, return zeros to unblock widget loading
+        return (download: 0.0, upload: 0.0)
+    }
+
+    // MARK: - Disk I/O (via IOKit)
+
+    private func getDiskUsage() -> (read: Double, write: Double)? {
+        // TODO: Implement disk I/O monitoring with IOKit
+        // For now, return zeros to unblock widget loading
+        return (read: 0.0, write: 0.0)
+    }
+}
+
+// MARK: - xsw_usage Struct
+
+/// Swap usage structure (from sys/sysctl.h)
+/// Note: boolean_t in C is UInt32, not Bool
+private struct xsw_usage {
+    var xsu_total: UInt64
+    var xsu_avail: UInt64
+    var xsu_used: UInt64
+    var xsu_pagesize: UInt32
+    var xsu_encrypted: UInt32  // boolean_t = UInt32 in C
 }

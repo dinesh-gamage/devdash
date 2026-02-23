@@ -30,20 +30,54 @@ struct ResourceMonitorWidget: View {
 
             // Content
             if let metrics = monitor.currentMetrics {
-                VStack(spacing: 20) {
-                    // CPU Usage
-                    CPUUsageView(cpuPercent: metrics.cpuUsagePercent)
+                ScrollView {
+                    VStack(spacing: 12) {
+                        // CPU Usage
+                        MetricCard(
+                            icon: "cpu",
+                            title: "CPU Usage",
+                            value: "\(Int(metrics.cpuUsagePercent))%",
+                            percent: metrics.cpuUsagePercent
+                        )
 
-                    Divider()
+                        // Memory Usage
+                        MetricCard(
+                            icon: "memorychip",
+                            title: "Memory",
+                            value: "\(String(format: "%.1f", metrics.memoryUsedGB)) / \(String(format: "%.1f", metrics.memoryTotalGB)) GB",
+                            subtitle: "\(Int(metrics.memoryUsagePercent))%",
+                            percent: metrics.memoryUsagePercent
+                        )
 
-                    // Memory Usage
-                    MemoryUsageView(
-                        usedGB: metrics.memoryUsedGB,
-                        totalGB: metrics.memoryTotalGB,
-                        percent: metrics.memoryUsagePercent
-                    )
+                        // Swap Usage
+                        MetricCard(
+                            icon: "arrow.2.squarepath",
+                            title: "Swap",
+                            value: "\(String(format: "%.1f", metrics.swapUsedGB)) / \(String(format: "%.1f", metrics.swapTotalGB)) GB",
+                            subtitle: "\(Int(metrics.swapUsagePercent))%",
+                            percent: metrics.swapUsagePercent
+                        )
+
+                        // Network Usage
+                        MetricCard(
+                            icon: "network",
+                            title: "Network",
+                            value: "↓ \(String(format: "%.1f", metrics.networkDownloadMBps)) MB/s",
+                            subtitle: "↑ \(String(format: "%.1f", metrics.networkUploadMBps)) MB/s",
+                            percent: nil
+                        )
+
+                        // Disk I/O
+                        MetricCard(
+                            icon: "internaldrive",
+                            title: "Disk I/O",
+                            value: "R: \(String(format: "%.1f", metrics.diskReadMBps)) MB/s",
+                            subtitle: "W: \(String(format: "%.1f", metrics.diskWriteMBps)) MB/s",
+                            percent: nil
+                        )
+                    }
+                    .padding(16)
                 }
-                .padding(16)
             } else {
                 VStack(spacing: 8) {
                     ProgressView()
@@ -68,16 +102,30 @@ struct ResourceMonitorWidget: View {
     }
 }
 
-// MARK: - CPU Usage View
+// MARK: - Metric Card (Compact Horizontal Layout)
 
-struct CPUUsageView: View {
-    let cpuPercent: Double
+struct MetricCard: View {
+    let icon: String
+    let title: String
+    let value: String
+    let subtitle: String?
+    let percent: Double?
 
-    private var usageLevel: UsageLevel {
-        SystemMetrics.usageColor(percent: cpuPercent)
+    init(icon: String, title: String, value: String, subtitle: String? = nil, percent: Double? = nil) {
+        self.icon = icon
+        self.title = title
+        self.value = value
+        self.subtitle = subtitle
+        self.percent = percent
+    }
+
+    private var usageLevel: UsageLevel? {
+        guard let percent = percent else { return nil }
+        return SystemMetrics.usageColor(percent: percent)
     }
 
     private var color: Color {
+        guard let usageLevel = usageLevel else { return .secondary }
         switch usageLevel {
         case .normal:
             return .green
@@ -89,131 +137,74 @@ struct CPUUsageView: View {
     }
 
     var body: some View {
-        HStack(spacing: 16) {
-            // Circular progress
-            ZStack {
-                Circle()
-                    .stroke(color.opacity(0.2), lineWidth: 6)
-                    .frame(width: 60, height: 60)
+        HStack(spacing: 12) {
+            // Icon
+            Image(systemName: icon)
+                .font(.title3)
+                .foregroundColor(color)
+                .frame(width: 24, height: 24)
 
-                Circle()
-                    .trim(from: 0, to: cpuPercent / 100)
-                    .stroke(color, style: StrokeStyle(lineWidth: 6, lineCap: .round))
-                    .frame(width: 60, height: 60)
-                    .rotationEffect(.degrees(-90))
-
-                Text("\(Int(cpuPercent))%")
-                    .font(.system(size: 16, weight: .bold, design: .rounded))
-                    .foregroundColor(.primary)
-            }
-
+            // Content
             VStack(alignment: .leading, spacing: 4) {
-                Text("CPU Usage")
-                    .font(.subheadline)
+                Text(title)
+                    .font(.caption)
                     .fontWeight(.medium)
+                    .foregroundColor(.secondary)
+
+                Text(value)
+                    .font(.subheadline)
+                    .fontWeight(.semibold)
                     .foregroundColor(.primary)
 
-                HStack(spacing: 6) {
-                    Circle()
-                        .fill(color)
-                        .frame(width: 8, height: 8)
-
-                    Text(statusText)
-                        .font(.caption)
+                if let subtitle = subtitle {
+                    Text(subtitle)
+                        .font(.caption2)
                         .foregroundColor(.secondary)
                 }
             }
 
             Spacer()
-        }
-    }
 
-    private var statusText: String {
-        switch usageLevel {
-        case .normal:
-            return "Normal"
-        case .warning:
-            return "High"
-        case .critical:
-            return "Critical"
-        }
-    }
-}
+            // Chart visualization (if percent is available)
+            if let percent = percent {
+                VStack(spacing: 4) {
+                    // Mini circular progress chart
+                    ZStack {
+                        Circle()
+                            .stroke(color.opacity(0.2), lineWidth: 4)
+                            .frame(width: 40, height: 40)
 
-// MARK: - Memory Usage View
+                        Circle()
+                            .trim(from: 0, to: percent / 100)
+                            .stroke(color, style: StrokeStyle(lineWidth: 4, lineCap: .round))
+                            .frame(width: 40, height: 40)
+                            .rotationEffect(.degrees(-90))
 
-struct MemoryUsageView: View {
-    let usedGB: Double
-    let totalGB: Double
-    let percent: Double
+                        Text("\(Int(percent))%")
+                            .font(.system(size: 10, weight: .bold, design: .rounded))
+                            .foregroundColor(.primary)
+                    }
 
-    private var usageLevel: UsageLevel {
-        SystemMetrics.usageColor(percent: percent)
-    }
-
-    private var color: Color {
-        switch usageLevel {
-        case .normal:
-            return .green
-        case .warning:
-            return .orange
-        case .critical:
-            return .red
-        }
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("Memory Usage")
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-                    .foregroundColor(.primary)
-
-                Spacer()
-
-                Text("\(String(format: "%.1f", usedGB)) GB / \(String(format: "%.1f", totalGB)) GB")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-
-            // Progress bar
-            GeometryReader { geometry in
-                ZStack(alignment: .leading) {
-                    // Background
-                    RoundedRectangle(cornerRadius: 4)
-                        .fill(color.opacity(0.2))
-                        .frame(height: 8)
-
-                    // Fill
-                    RoundedRectangle(cornerRadius: 4)
-                        .fill(color)
-                        .frame(width: geometry.size.width * (percent / 100), height: 8)
-                }
-            }
-            .frame(height: 8)
-
-            HStack {
-                HStack(spacing: 6) {
-                    Circle()
-                        .fill(color)
-                        .frame(width: 8, height: 8)
-
+                    // Status text below chart
                     Text(statusText)
-                        .font(.caption)
+                        .font(.caption2)
                         .foregroundColor(.secondary)
                 }
-
-                Spacer()
-
-                Text("\(Int(percent))%")
-                    .font(.system(size: 14, weight: .semibold, design: .rounded))
-                    .foregroundColor(.primary)
             }
         }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color(NSColor.controlBackgroundColor))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(color.opacity(percent != nil ? 0.3 : 0.1), lineWidth: 1)
+        )
     }
 
     private var statusText: String {
+        guard let usageLevel = usageLevel else { return "" }
         switch usageLevel {
         case .normal:
             return "Normal"

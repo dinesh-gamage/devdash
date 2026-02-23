@@ -43,7 +43,7 @@ struct ServiceDashboardWidget: View {
                         }
                     }
                 }
-                .frame(maxHeight: 250)
+                .frame(maxHeight: 300)
             }
         }
         .task {
