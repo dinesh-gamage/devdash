@@ -13,16 +13,32 @@ struct StatCard: View {
     let value: String
     let color: Color
     let subtitle: String?
+    let onTap: (() -> Void)?
 
-    init(icon: String, label: String, value: String, color: Color, subtitle: String? = nil) {
+    init(icon: String, label: String, value: String, color: Color, subtitle: String? = nil, onTap: (() -> Void)? = nil) {
         self.icon = icon
         self.label = label
         self.value = value
         self.color = color
         self.subtitle = subtitle
+        self.onTap = onTap
     }
 
     var body: some View {
+        Group {
+            if let onTap = onTap {
+                Button(action: onTap) {
+                    cardContent
+                }
+                .buttonStyle(.plain)
+            } else {
+                cardContent
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var cardContent: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top) {
                 Image(systemName: icon)

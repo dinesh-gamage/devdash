@@ -8,14 +8,20 @@
 import SwiftUI
 
 struct AWSVaultCountWidget: View {
+    let onTap: (() -> Void)?
     @ObservedObject private var manager = AWSVaultManagerState.shared.manager
+
+    init(onTap: (() -> Void)? = nil) {
+        self.onTap = onTap
+    }
 
     var body: some View {
         StatCard(
             icon: "person.badge.key.fill",
             label: "AWS Profiles",
             value: "\(manager.profiles.count)",
-            color: .orange
+            color: .orange,
+            onTap: onTap
         )
     }
 }

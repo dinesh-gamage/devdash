@@ -8,7 +8,12 @@
 import SwiftUI
 
 struct ServiceCountWidget: View {
+    let onTap: (() -> Void)?
     @ObservedObject private var manager = ServiceManagerState.shared.manager
+
+    init(onTap: (() -> Void)? = nil) {
+        self.onTap = onTap
+    }
 
     var runningCount: Int {
         manager.servicesList.filter { $0.isRunning }.count
@@ -23,8 +28,8 @@ struct ServiceCountWidget: View {
             icon: "server.rack",
             label: "Services",
             value: "\(runningCount)/\(manager.servicesList.count)",
-            color: .blue
-            // subtitle: "\(stoppedCount) stopped"
+            color: .blue,
+            onTap: onTap
         )
         .task {
             manager.checkAllServices()

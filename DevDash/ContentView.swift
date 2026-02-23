@@ -268,10 +268,10 @@ struct DashboardView: View {
                     VStack(alignment: .leading, spacing: 16) {
                         // Count Widgets Row
                         HStack(spacing: 16) {
-                            ServiceCountWidget()
-                            EC2CountWidget()
-                            CredentialsCountWidget()
-                            AWSVaultCountWidget()
+                            ServiceCountWidget(onTap: { onSelectModule("service-manager") })
+                            EC2CountWidget(onTap: { onSelectModule("ec2-manager") })
+                            CredentialsCountWidget(onTap: { onSelectModule("credentials-manager") })
+                            AWSVaultCountWidget(onTap: { onSelectModule("aws-vault-manager") })
                         }
 
                         // Dashboard Widgets Row
@@ -293,7 +293,10 @@ struct DashboardView: View {
                     // Right column: DevDash Resources + System Resources
                     VStack(spacing: 16) {
                         // DevDash Resource Widget
-                        DevDashResourceWidget()
+                        DevDashResourceWidget(onTap: {
+                            ResourceMonitorState.shared.selectedView = .devdash
+                            onSelectModule("resource-monitor")
+                        })
 
                         // Resource Monitor Widget
                         ResourceMonitorWidget(

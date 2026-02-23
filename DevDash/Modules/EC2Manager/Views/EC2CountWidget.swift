@@ -8,7 +8,12 @@
 import SwiftUI
 
 struct EC2CountWidget: View {
+    let onTap: (() -> Void)?
     @ObservedObject private var manager = EC2ManagerState.shared.manager
+
+    init(onTap: (() -> Void)? = nil) {
+        self.onTap = onTap
+    }
 
     var totalInstances: Int {
         manager.groups.reduce(0) { $0 + $1.instances.count }
@@ -19,7 +24,8 @@ struct EC2CountWidget: View {
             icon: "cloud.fill",
             label: "EC2 Instances",
             value: "\(totalInstances)",
-            color: .orange
+            color: .orange,
+            onTap: onTap
         )
     }
 }

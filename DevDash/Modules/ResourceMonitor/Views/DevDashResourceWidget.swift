@@ -8,9 +8,14 @@
 import SwiftUI
 
 struct DevDashResourceWidget: View {
+    let onTap: (() -> Void)?
     @ObservedObject private var monitor = ResourceMonitorState.shared.monitor
     @State private var metrics: (totalCPU: Double, totalMemoryMB: Double, processCount: Int)?
     @State private var refreshTimer: Timer?
+
+    init(onTap: (() -> Void)? = nil) {
+        self.onTap = onTap
+    }
 
     var body: some View {
         HStack(spacing: 16) {
@@ -19,7 +24,8 @@ struct DevDashResourceWidget: View {
                 icon: "cpu",
                 label: "DevDash CPU",
                 value: String(format: "%.0f%%", metrics?.totalCPU ?? 0.0),
-                color: .blue
+                color: .blue,
+                onTap: onTap
             )
 
             // Memory Usage Card
@@ -27,7 +33,8 @@ struct DevDashResourceWidget: View {
                 icon: "memorychip",
                 label: "DevDash Memory",
                 value: String(format: "%.0f MB", metrics?.totalMemoryMB ?? 0.0),
-                color: .orange
+                color: .orange,
+                onTap: onTap
             )
         }
         .onAppear {

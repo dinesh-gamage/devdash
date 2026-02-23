@@ -11,8 +11,8 @@ import Combine
 // MARK: - Resource Monitor State
 
 enum ResourceMonitorView: String, CaseIterable, Identifiable {
-    case overall = "Overall"
     case devdash = "DevDash"
+    case overall = "Overall"
 
     var id: String { rawValue }
 
@@ -31,7 +31,7 @@ class ResourceMonitorState: ObservableObject {
     static let shared = ResourceMonitorState()
 
     @Published var monitor: SystemMetricsMonitor
-    @Published var selectedView: ResourceMonitorView? = .overall
+    @Published var selectedView: ResourceMonitorView? = .devdash
 
     private var cancellables = Set<AnyCancellable>()
 
