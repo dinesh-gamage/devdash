@@ -236,6 +236,130 @@ class SystemMetricsMonitor: ObservableObject {
         // For now, return zeros to unblock widget loading
         return (read: 0.0, write: 0.0)
     }
+
+    // MARK: - Top Processes
+
+    func getTopProcesses(sortBy: ProcessSortOption, limit: Int = 10) -> [SystemProcess] {
+        // Get list of all process IDs
+        let maxProcs = 1024
+        var pids = [pid_t](repeating: 0, count: maxProcs)
+        let procCount = proc_listallpids(&pids, Int32(maxProcs * MemoryLayout<pid_t>.size))
+
+        guard procCount > 0 else { return [] }
+
+        // Use min-heap to maintain top N processes (more efficient than sorting full array)
+        var topProcesses: [SystemProcess] = []
+        topProcesses.reserveCapacity(limit)
+
+        // Iterate through PIDs and maintain top N
+        for i in 0..<Int(procCount) {
+            let pid = pids[i]
+            guard pid > 0 else { continue }
+
+            // Fetch only the info needed for the selected sort metric
+            guard let processInfo = getProcessInfo(pid: pid, sortBy: sortBy) else { continue }
+
+            // Add to top N list
+            if topProcesses.count < limit {
+                topProcesses.append(processInfo)
+                if topProcesses.count == limit {
+                    // Sort once when we reach limit size
+                    topProcesses.sort { compareProcesses($0, $1, by: sortBy) }
+                }
+            } else {
+                // Check if current process beats the worst in top N
+                let worstInTop = topProcesses.last!
+                if compareProcesses(processInfo, worstInTop, by: sortBy) {
+                    // Replace worst and re-sort
+                    topProcesses[limit - 1] = processInfo
+                    topProcesses.sort { compareProcesses($0, $1, by: sortBy) }
+                }
+            }
+        }
+
+        return topProcesses
+    }
+
+    // Compare two processes based on sort option (returns true if p1 > p2)
+    private func compareProcesses(_ p1: SystemProcess, _ p2: SystemProcess, by sortBy: ProcessSortOption) -> Bool {
+        switch sortBy {
+        case .cpu:
+            return p1.cpuPercent > p2.cpuPercent
+        case .memory:
+            return p1.memoryMB > p2.memoryMB
+        case .network:
+            return p1.networkMBps > p2.networkMBps
+        case .disk:
+            return p1.diskMBps > p2.diskMBps
+        }
+    }
+
+    private func getProcessInfo(pid: pid_t, sortBy: ProcessSortOption) -> SystemProcess? {
+        // Get process name (always needed)
+        let maxPathSize = 4096
+        var pathBuffer = [CChar](repeating: 0, count: maxPathSize)
+        let pathLen = proc_pidpath(pid, &pathBuffer, UInt32(maxPathSize))
+
+        let name: String
+        if pathLen > 0 {
+            let fullPath = String(cString: pathBuffer)
+            name = URL(fileURLWithPath: fullPath).lastPathComponent
+        } else {
+            name = "Unknown"
+        }
+
+        // Fetch metrics based on sort option (optimization: only fetch what's needed)
+        var cpuPercent: Double = 0.0
+        var memoryMB: Double = 0.0
+        var networkMBps: Double = 0.0
+        var diskMBps: Double = 0.0
+
+        switch sortBy {
+        case .memory:
+            // Only fetch memory info
+            memoryMB = getProcessMemory(pid: pid)
+        case .cpu:
+            // Only fetch CPU info (placeholder for now)
+            cpuPercent = getProcessCPU(pid: pid)
+        case .network:
+            // Only fetch network info (placeholder)
+            networkMBps = 0.0
+        case .disk:
+            // Only fetch disk info (placeholder)
+            diskMBps = 0.0
+        }
+
+        return SystemProcess(
+            id: pid,
+            name: name,
+            cpuPercent: cpuPercent,
+            memoryMB: memoryMB,
+            networkMBps: networkMBps,
+            diskMBps: diskMBps
+        )
+    }
+
+    private func getProcessMemory(pid: pid_t) -> Double {
+        var taskInfo = mach_task_basic_info()
+        var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size) / 4
+        let kr = withUnsafeMutablePointer(to: &taskInfo) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: 1) {
+                task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), $0, &count)
+            }
+        }
+
+        if kr == KERN_SUCCESS {
+            return Double(taskInfo.resident_size) / 1_048_576.0  // Convert to MB
+        }
+        return 0.0
+    }
+
+    private func getProcessCPU(pid: pid_t) -> Double {
+        // CPU usage calculation requires delta tracking per process
+        // For now, return 0 as placeholder
+        // TODO: Implement per-process CPU tracking with rusage or task_info
+        return 0.0
+    }
 }
 
 // MARK: - xsw_usage Struct

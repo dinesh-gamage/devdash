@@ -10,11 +10,28 @@ import Combine
 
 // MARK: - Resource Monitor State
 
+enum ResourceMonitorView: String, CaseIterable, Identifiable {
+    case overall = "Overall"
+    case devdash = "DevDash"
+
+    var id: String { rawValue }
+
+    var icon: String {
+        switch self {
+        case .overall:
+            return "chart.bar.fill"
+        case .devdash:
+            return "app.badge.fill"
+        }
+    }
+}
+
 @MainActor
 class ResourceMonitorState: ObservableObject {
     static let shared = ResourceMonitorState()
 
     @Published var monitor: SystemMetricsMonitor
+    @Published var selectedView: ResourceMonitorView? = .overall
 
     private var cancellables = Set<AnyCancellable>()
 
@@ -38,13 +55,12 @@ struct ResourceMonitorModule: DevDashModule {
     let description = "Monitor system CPU and memory usage"
     let accentColor = Color.orange
 
-    // Dashboard-only module - no sidebar view needed
     func makeSidebarView() -> AnyView {
-        AnyView(EmptyView())
+        AnyView(ResourceMonitorSidebarView())
     }
 
     func makeDetailView() -> AnyView {
-        AnyView(EmptyView())
+        AnyView(ResourceMonitorDetailView())
     }
 
     // MARK: - Backup Support
@@ -56,5 +72,65 @@ struct ResourceMonitorModule: DevDashModule {
     func exportForBackup() async throws -> Data {
         // Resource monitor has no persistent data to back up
         return Data()
+    }
+}
+
+// MARK: - Sidebar View
+
+struct ResourceMonitorSidebarView: View {
+    @ObservedObject var state = ResourceMonitorState.shared
+
+    var body: some View {
+        ModuleSidebarList(
+            toolbarButtons: [],  // No toolbar buttons for this module
+            items: ResourceMonitorView.allCases,
+            emptyState: EmptyStateConfig(
+                icon: "gauge.with.dots.needle.67percent",
+                title: "No Views",
+                subtitle: "No resource monitoring views available"
+            ),
+            selectedItem: $state.selectedView,
+            itemContent: { view, isSelected in
+                ModuleSidebarListItem(
+                    icon: .image(systemName: view.icon, color: .orange),
+                    title: view.rawValue,
+                    isSelected: isSelected,
+                    onTap: {
+                        state.selectedView = view
+                    }
+                )
+            }
+        )
+    }
+}
+
+// MARK: - Detail View
+
+struct ResourceMonitorDetailView: View {
+    @ObservedObject var state = ResourceMonitorState.shared
+
+    var body: some View {
+        Group {
+            if let selectedView = state.selectedView {
+                switch selectedView {
+                case .overall:
+                    OverallDetailView()
+                case .devdash:
+                    DevDashDetailView()
+                }
+            } else {
+                // Empty state if nothing selected
+                VStack(spacing: 12) {
+                    Image(systemName: "gauge.with.dots.needle.67percent")
+                        .font(.system(size: 48))
+                        .foregroundColor(.secondary.opacity(0.5))
+                    Text("Select a view")
+                        .font(.callout)
+                        .foregroundColor(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color(NSColor.windowBackgroundColor))
+            }
+        }
     }
 }
