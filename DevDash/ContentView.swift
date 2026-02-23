@@ -262,19 +262,20 @@ struct DashboardView: View {
                 .padding(.horizontal, 20)
                 .padding(.top, 20)
 
-                // Two-column layout: Left (count widgets + existing widgets) + Right (resource monitor)
-                HStack(alignment: .top, spacing: 20) {
-                    // Left column: Count widgets + Existing widgets
-                    VStack(alignment: .leading, spacing: 20) {
-                        // Count Widgets
-                        HStack(spacing: 12) {
+                // Main layout: Left column + Right column
+                HStack(alignment: .top, spacing: 16) {
+                    // Left column: Count widgets + Dashboard widgets
+                    VStack(alignment: .leading, spacing: 16) {
+                        // Count Widgets Row
+                        HStack(spacing: 16) {
                             ServiceCountWidget()
                             EC2CountWidget()
                             CredentialsCountWidget()
                             AWSVaultCountWidget()
                         }
 
-                        HStack(spacing: 12) {
+                        // Dashboard Widgets Row
+                        HStack(alignment: .top, spacing: 16) {
                             // Service Manager Widget
                             ServiceDashboardWidget(
                                 onModuleTap: { onSelectModule("service-manager") }
@@ -285,15 +286,28 @@ struct DashboardView: View {
                                 onModuleTap: { onSelectModule("ec2-manager") }
                             )
                         }
+                        .frame(height: 350)
                     }
                     .frame(maxWidth: .infinity)
 
-                    // Right column: Resource Monitor
-                    VStack(alignment: .leading, spacing: 20) {
-                        ResourceMonitorWidget()
-                            .frame(maxHeight: .infinity, alignment: .top)
+                    // Right column: Resource Monitor + Coming Soon
+                    VStack(spacing: 16) {
+                        // Coming Soon placeholder (empty for now)
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(Color(NSColor.controlBackgroundColor))
+                            // .frame(height: 60)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 12)
+                                    .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
+                            )
+
+                        // Resource Monitor Widget
+                        ResourceMonitorWidget(
+                            onModuleTap: { onSelectModule("resource-monitor") }
+                        )
+                        .frame(height: 350)
                     }
-                    .frame(maxWidth: 300)
+                    .frame(width: 300)
                 }
                 .padding(.horizontal, 20)
                 .padding(.bottom, 20)

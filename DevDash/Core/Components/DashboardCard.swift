@@ -35,7 +35,7 @@ struct DashboardCard<Content: View>: View {
 
             // Content area
             content()
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 .background(accentColor.opacity(0.1))
 
             // Footer

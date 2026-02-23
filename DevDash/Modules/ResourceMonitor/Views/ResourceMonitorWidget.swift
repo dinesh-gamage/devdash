@@ -8,96 +8,121 @@
 import SwiftUI
 
 struct ResourceMonitorWidget: View {
+    let onModuleTap: (() -> Void)?
     @ObservedObject private var monitor = ResourceMonitorState.shared.monitor
 
+    init(onModuleTap: (() -> Void)? = nil) {
+        self.onModuleTap = onModuleTap
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            // Header
-            HStack {
-                Text("System Resources")
-                    .font(.headline)
-                    .foregroundColor(.white)
-
-                Spacer()
-
-                Image(systemName: "gauge.with.dots.needle.67percent")
-                    .font(.title3)
-                    .foregroundColor(.white.opacity(0.8))
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
-            .background(Color.orange.opacity(0.1))
-
-            // Content
-            if let metrics = monitor.currentMetrics {
-                ScrollView {
-                    VStack(spacing: 12) {
-                        // CPU Usage
-                        MetricCard(
-                            icon: "cpu",
-                            title: "CPU Usage",
-                            value: "\(Int(metrics.cpuUsagePercent))%",
-                            percent: metrics.cpuUsagePercent
-                        )
-
-                        // Memory Usage
-                        MetricCard(
-                            icon: "memorychip",
-                            title: "Memory",
-                            value: "\(String(format: "%.1f", metrics.memoryUsedGB)) / \(String(format: "%.1f", metrics.memoryTotalGB)) GB",
-                            subtitle: "\(Int(metrics.memoryUsagePercent))%",
-                            percent: metrics.memoryUsagePercent
-                        )
-
-                        // Swap Usage
-                        MetricCard(
-                            icon: "arrow.2.squarepath",
-                            title: "Swap",
-                            value: "\(String(format: "%.1f", metrics.swapUsedGB)) / \(String(format: "%.1f", metrics.swapTotalGB)) GB",
-                            subtitle: "\(Int(metrics.swapUsagePercent))%",
-                            percent: metrics.swapUsagePercent
-                        )
-
-                        // Network Usage
-                        MetricCard(
-                            icon: "network",
-                            title: "Network",
-                            value: "↓ \(String(format: "%.1f", metrics.networkDownloadMBps)) MB/s",
-                            subtitle: "↑ \(String(format: "%.1f", metrics.networkUploadMBps)) MB/s",
-                            percent: nil
-                        )
-
-                        // Disk I/O
-                        MetricCard(
-                            icon: "internaldrive",
-                            title: "Disk I/O",
-                            value: "R: \(String(format: "%.1f", metrics.diskReadMBps)) MB/s",
-                            subtitle: "W: \(String(format: "%.1f", metrics.diskWriteMBps)) MB/s",
-                            percent: nil
-                        )
-                    }
-                    .padding(16)
+        Group {
+            if let onModuleTap = onModuleTap {
+                // Dashboard widget with footer
+                DashboardCard(
+                    title: "System Resources",
+                    moduleName: "Resource Monitor",
+                    moduleIcon: "gauge.with.dots.needle.67percent",
+                    accentColor: .orange,
+                    onModuleTap: onModuleTap
+                ) {
+                    widgetContent
                 }
             } else {
-                VStack(spacing: 8) {
-                    ProgressView()
-                        .scaleEffect(0.8)
-                    Text("Loading metrics...")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                // Standalone widget without footer
+                VStack(alignment: .leading, spacing: 0) {
+                    // Header
+                    HStack {
+                        Text("System Resources")
+                            .font(.headline)
+                            .foregroundColor(.white)
+
+                        Spacer()
+
+                        Image(systemName: "gauge.with.dots.needle.67percent")
+                            .font(.title3)
+                            .foregroundColor(.white.opacity(0.8))
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+                    .background(Color.orange.opacity(0.1))
+
+                    widgetContent
                 }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 40)
+                .background(Color.orange.opacity(0.1))
+                .cornerRadius(12)
+                .shadow(color: AppTheme.shadowColor, radius: 4, y: 2)
             }
         }
-        .background(Color.orange.opacity(0.1))
-        .cornerRadius(12)
-        .shadow(color: AppTheme.shadowColor, radius: 4, y: 2)
         .onAppear {
             monitor.startMonitoring()
         }
         .onDisappear {
             monitor.stopMonitoring()
+        }
+    }
+
+    @ViewBuilder
+    private var widgetContent: some View {
+        if let metrics = monitor.currentMetrics {
+            ScrollView {
+                VStack(spacing: 12) {
+                    // CPU Usage
+                    MetricCard(
+                        icon: "cpu",
+                        title: "CPU Usage",
+                        value: "\(Int(metrics.cpuUsagePercent))%",
+                        percent: metrics.cpuUsagePercent
+                    )
+
+                    // Memory Usage
+                    MetricCard(
+                        icon: "memorychip",
+                        title: "Memory",
+                        value: "\(String(format: "%.1f", metrics.memoryUsedGB)) / \(String(format: "%.1f", metrics.memoryTotalGB)) GB",
+                        subtitle: "\(Int(metrics.memoryUsagePercent))%",
+                        percent: metrics.memoryUsagePercent
+                    )
+
+                    // Swap Usage
+                    MetricCard(
+                        icon: "arrow.2.squarepath",
+                        title: "Swap",
+                        value: "\(String(format: "%.1f", metrics.swapUsedGB)) / \(String(format: "%.1f", metrics.swapTotalGB)) GB",
+                        subtitle: "\(Int(metrics.swapUsagePercent))%",
+                        percent: metrics.swapUsagePercent
+                    )
+
+                    // Network Usage
+                    MetricCard(
+                        icon: "network",
+                        title: "Network",
+                        value: "↓ \(String(format: "%.1f", metrics.networkDownloadMBps)) MB/s",
+                        subtitle: "↑ \(String(format: "%.1f", metrics.networkUploadMBps)) MB/s",
+                        percent: nil
+                    )
+
+                    // Disk I/O
+                    MetricCard(
+                        icon: "internaldrive",
+                        title: "Disk I/O",
+                        value: "R: \(String(format: "%.1f", metrics.diskReadMBps)) MB/s",
+                        subtitle: "W: \(String(format: "%.1f", metrics.diskWriteMBps)) MB/s",
+                        percent: nil
+                    )
+                }
+                .padding(16)
+            }
+        } else {
+            VStack(spacing: 8) {
+                ProgressView()
+                    .scaleEffect(0.8)
+                Text("Loading metrics...")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(.vertical, 40)
         }
     }
 }

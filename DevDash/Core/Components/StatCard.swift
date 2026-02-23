@@ -35,6 +35,7 @@ struct StatCard: View {
                 Text(value)
                     .font(.system(size: 32, weight: .bold, design: .rounded))
                     .foregroundColor(.primary)
+                    .lineLimit(1)
             }
 
             VStack(alignment: .leading, spacing: 4) {
@@ -42,16 +43,18 @@ struct StatCard: View {
                     .font(.subheadline)
                     .fontWeight(.medium)
                     .foregroundColor(.primary)
+                    .lineLimit(1)
 
                 if let subtitle = subtitle {
                     Text(subtitle)
                         .font(.caption)
                         .foregroundColor(.secondary)
+                        .lineLimit(1)
                 }
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(16)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
         .background(
             RoundedRectangle(cornerRadius: 12)
                 .fill(Color(NSColor.controlBackgroundColor))

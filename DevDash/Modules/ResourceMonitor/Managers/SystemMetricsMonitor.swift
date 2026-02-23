@@ -360,6 +360,77 @@ class SystemMetricsMonitor: ObservableObject {
         // TODO: Implement per-process CPU tracking with rusage or task_info
         return 0.0
     }
+
+    // MARK: - DevDash-Specific Monitoring
+
+    func getDevDashProcesses(sortBy: ProcessSortOption) -> [SystemProcess] {
+        let devdashPID = ProcessInfo.processInfo.processIdentifier
+        var devdashProcesses: [SystemProcess] = []
+
+        // Get DevDash main process
+        if let mainProcess = getProcessInfo(pid: devdashPID, sortBy: sortBy) {
+            devdashProcesses.append(mainProcess)
+        }
+
+        // Get all child processes
+        let maxProcs = 1024
+        var childPIDs = [pid_t](repeating: 0, count: maxProcs)
+        let childCount = proc_listpids(UInt32(PROC_PPID_ONLY), UInt32(devdashPID), &childPIDs, Int32(maxProcs * MemoryLayout<pid_t>.size))
+
+        guard childCount > 0 else {
+            // No children, just return main process
+            return devdashProcesses
+        }
+
+        // Add all child processes
+        for i in 0..<Int(childCount) {
+            let pid = childPIDs[i]
+            guard pid > 0 else { continue }
+
+            if let childProcess = getProcessInfo(pid: pid, sortBy: sortBy) {
+                devdashProcesses.append(childProcess)
+            }
+        }
+
+        // Sort by selected metric
+        devdashProcesses.sort { compareProcesses($0, $1, by: sortBy) }
+
+        return devdashProcesses
+    }
+
+    func getDevDashAggregatedMetrics() -> (totalCPU: Double, totalMemoryMB: Double, processCount: Int) {
+        let devdashPID = ProcessInfo.processInfo.processIdentifier
+        var totalCPU: Double = 0.0
+        var totalMemory: Double = 0.0
+        var count = 0
+
+        // Get DevDash main process metrics
+        let mainMemory = getProcessMemory(pid: devdashPID)
+        let mainCPU = getProcessCPU(pid: devdashPID)
+        totalMemory += mainMemory
+        totalCPU += mainCPU
+        count += 1
+
+        // Get all child processes
+        let maxProcs = 1024
+        var childPIDs = [pid_t](repeating: 0, count: maxProcs)
+        let childCount = proc_listpids(UInt32(PROC_PPID_ONLY), UInt32(devdashPID), &childPIDs, Int32(maxProcs * MemoryLayout<pid_t>.size))
+
+        if childCount > 0 {
+            for i in 0..<Int(childCount) {
+                let pid = childPIDs[i]
+                guard pid > 0 else { continue }
+
+                let memory = getProcessMemory(pid: pid)
+                let cpu = getProcessCPU(pid: pid)
+                totalMemory += memory
+                totalCPU += cpu
+                count += 1
+            }
+        }
+
+        return (totalCPU: totalCPU, totalMemoryMB: totalMemory, processCount: count)
+    }
 }
 
 // MARK: - xsw_usage Struct

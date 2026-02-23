@@ -221,30 +221,249 @@ struct ProcessRow: View {
     }
 }
 
-// MARK: - DevDash Detail View (Placeholder)
+// MARK: - DevDash Detail View
 
 struct DevDashDetailView: View {
+    private var monitor: SystemMetricsMonitor { ResourceMonitorState.shared.monitor }
+    @State private var selectedSort: ProcessSortOption = .memory
+    @State private var processes: [SystemProcess] = []
+    @State private var aggregatedMetrics: (totalCPU: Double, totalMemoryMB: Double, processCount: Int)?
+    @State private var isLoading = false
+    @State private var refreshTimer: Timer?
+
     var body: some View {
         VStack(spacing: 0) {
-            ModuleDetailHeader(title: "DevDash Resources")
+            // Header
+            ModuleDetailHeader(
+                title: "DevDash Resources",
+                actionButtons: {
+                    VariantButton(icon: "arrow.clockwise", variant: .primary, tooltip: "Refresh Now", isLoading: isLoading) {
+                        fetchData()
+                    }
+                }
+            )
 
             Divider()
 
-            VStack(spacing: 12) {
-                Image(systemName: "app.badge")
-                    .font(.system(size: 48))
-                    .foregroundColor(.secondary.opacity(0.5))
+            // Two-column layout
+            HStack(alignment: .top, spacing: 20) {
+                // Left column: DevDash Metrics Card (fixed width)
+                DevDashMetricsCard(metrics: aggregatedMetrics)
+                    .frame(width: 300)
 
-                Text("DevDash resource monitoring")
-                    .font(.callout)
-                    .foregroundColor(.secondary)
+                Divider()
 
-                Text("Coming soon...")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                // Right column: DevDash Processes
+                VStack(alignment: .leading, spacing: 12) {
+                    // Filter tabs
+                    HStack(spacing: 8) {
+                        ForEach(ProcessSortOption.allCases, id: \.self) { option in
+                            FilterTab(
+                                title: option.rawValue,
+                                icon: option.icon,
+                                isSelected: selectedSort == option
+                            ) {
+                                selectedSort = option
+                            }
+                        }
+
+                        Spacer()
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.top, 16)
+
+                    // Process list
+                    if processes.isEmpty && !isLoading {
+                        VStack(spacing: 12) {
+                            Image(systemName: "app.badge")
+                                .font(.system(size: 48))
+                                .foregroundColor(.secondary.opacity(0.5))
+
+                            Text("No DevDash processes found")
+                                .font(.callout)
+                                .foregroundColor(.secondary)
+
+                            VariantButton("Load Processes", icon: "arrow.clockwise", variant: .primary) {
+                                fetchData()
+                            }
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else {
+                        ScrollView {
+                            VStack(spacing: 0) {
+                                ForEach(processes) { process in
+                                    ProcessRow(process: process, sortBy: selectedSort)
+
+                                    if process.id != processes.last?.id {
+                                        Divider()
+                                            .padding(.leading, 56)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(20)
         }
         .background(Color(NSColor.windowBackgroundColor))
+        .onAppear {
+            startAutoRefresh()
+        }
+        .onDisappear {
+            stopAutoRefresh()
+        }
+        .onChange(of: selectedSort) { _, _ in
+            fetchData()
+        }
+    }
+
+    // MARK: - Auto-Refresh Lifecycle
+
+    private func startAutoRefresh() {
+        fetchData()
+
+        refreshTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { _ in
+            Task { @MainActor in
+                fetchData()
+            }
+        }
+    }
+
+    private func stopAutoRefresh() {
+        refreshTimer?.invalidate()
+        refreshTimer = nil
+    }
+
+    private func fetchData() {
+        isLoading = true
+        Task.detached {
+            let processList = await MainActor.run {
+                monitor.getDevDashProcesses(sortBy: selectedSort)
+            }
+
+            let metrics = await MainActor.run {
+                monitor.getDevDashAggregatedMetrics()
+            }
+
+            await MainActor.run {
+                processes = processList
+                aggregatedMetrics = metrics
+                isLoading = false
+            }
+        }
+    }
+}
+
+// MARK: - DevDash Metrics Card
+
+struct DevDashMetricsCard: View {
+    let metrics: (totalCPU: Double, totalMemoryMB: Double, processCount: Int)?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Header
+            HStack {
+                Text("DevDash Usage")
+                    .font(.headline)
+                    .foregroundColor(.white)
+
+                Spacer()
+
+                Image(systemName: "app.badge.fill")
+                    .font(.title3)
+                    .foregroundColor(.white.opacity(0.8))
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .background(Color.orange.opacity(0.1))
+
+            // Content
+            if let metrics = metrics {
+                VStack(spacing: 12) {
+                    // Process Count
+                    HStack {
+                        Image(systemName: "number")
+                            .foregroundColor(.orange)
+                            .frame(width: 24)
+
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Processes")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+
+                            Text("\(metrics.processCount)")
+                                .font(.title2)
+                                .fontWeight(.semibold)
+                                .foregroundColor(.primary)
+                        }
+
+                        Spacer()
+                    }
+
+                    Divider()
+
+                    // Total Memory
+                    HStack {
+                        Image(systemName: "memorychip")
+                            .foregroundColor(.orange)
+                            .frame(width: 24)
+
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Total Memory")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+
+                            Text(String(format: "%.1f MB", metrics.totalMemoryMB))
+                                .font(.title2)
+                                .fontWeight(.semibold)
+                                .foregroundColor(.primary)
+                        }
+
+                        Spacer()
+                    }
+
+                    Divider()
+
+                    // Total CPU
+                    HStack {
+                        Image(systemName: "cpu")
+                            .foregroundColor(.orange)
+                            .frame(width: 24)
+
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Total CPU")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+
+                            Text(String(format: "%.1f%%", metrics.totalCPU))
+                                .font(.title2)
+                                .fontWeight(.semibold)
+                                .foregroundColor(.primary)
+                        }
+
+                        Spacer()
+                    }
+                }
+                .padding(16)
+            } else {
+                // Loading state
+                VStack(spacing: 12) {
+                    ProgressView()
+                        .scaleEffect(0.8)
+
+                    Text("Loading metrics...")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(.vertical, 40)
+            }
+
+            Spacer()
+        }
+        .background(Color(NSColor.controlBackgroundColor))
+        .cornerRadius(8)
     }
 }

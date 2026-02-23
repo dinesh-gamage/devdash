@@ -86,7 +86,6 @@ struct EC2DashboardWidget: View {
                         }
                     }
                 }
-                .frame(maxHeight: 300)
             }
         }
     }
