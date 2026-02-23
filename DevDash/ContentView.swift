@@ -271,17 +271,27 @@ struct DashboardView: View {
                 }
                 .padding(.horizontal, 20)
 
-                // List Widgets
+                // Two-column layout: Left (existing widgets) + Right (resource monitor)
                 HStack(alignment: .top, spacing: 20) {
-                    // Service Manager Widget
-                    ServiceDashboardWidget(
-                        onModuleTap: { onSelectModule("service-manager") }
-                    )
+                    // Left column: Existing widgets
+                    VStack(alignment: .leading, spacing: 20) {
+                        // Service Manager Widget
+                        ServiceDashboardWidget(
+                            onModuleTap: { onSelectModule("service-manager") }
+                        )
 
-                    // EC2 Manager Widget
-                    EC2DashboardWidget(
-                        onModuleTap: { onSelectModule("ec2-manager") }
-                    )
+                        // EC2 Manager Widget
+                        EC2DashboardWidget(
+                            onModuleTap: { onSelectModule("ec2-manager") }
+                        )
+                    }
+                    .frame(maxWidth: .infinity)
+
+                    // Right column: Resource Monitor
+                    VStack(alignment: .leading, spacing: 20) {
+                        ResourceMonitorWidget()
+                    }
+                    .frame(maxWidth: .infinity)
                 }
                 .padding(.horizontal, 20)
                 .padding(.bottom, 20)
