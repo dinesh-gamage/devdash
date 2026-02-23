@@ -28,12 +28,12 @@ struct StatCard: View {
                 Image(systemName: icon)
                     .font(.title2)
                     .foregroundColor(color)
-                    .frame(width: 32, height: 32)
+                    .frame(width: 20, height: 20)
 
                 Spacer()
 
                 Text(value)
-                    .font(.system(size: 32, weight: .bold, design: .rounded))
+                    .font(.system(size: 20, weight: .bold, design: .rounded))
                     .foregroundColor(.primary)
                     .lineLimit(1)
             }

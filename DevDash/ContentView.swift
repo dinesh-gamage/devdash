@@ -290,16 +290,10 @@ struct DashboardView: View {
                     }
                     .frame(maxWidth: .infinity)
 
-                    // Right column: Resource Monitor + Coming Soon
+                    // Right column: DevDash Resources + System Resources
                     VStack(spacing: 16) {
-                        // Coming Soon placeholder (empty for now)
-                        RoundedRectangle(cornerRadius: 12)
-                            .fill(Color(NSColor.controlBackgroundColor))
-                            // .frame(height: 60)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 12)
-                                    .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
-                            )
+                        // DevDash Resource Widget
+                        DevDashResourceWidget()
 
                         // Resource Monitor Widget
                         ResourceMonitorWidget(
@@ -307,7 +301,7 @@ struct DashboardView: View {
                         )
                         .frame(height: 350)
                     }
-                    .frame(width: 300)
+                    .frame(width: 350)
                 }
                 .padding(.horizontal, 20)
                 .padding(.bottom, 20)
