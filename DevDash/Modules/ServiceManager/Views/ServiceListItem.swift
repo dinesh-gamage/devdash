@@ -16,7 +16,6 @@ struct ServiceListItem: View {
     @State private var isHovering = false
     @State private var isEditHovering = false
     @State private var isDeleteHovering = false
-    @ObservedObject var accentColor = AppTheme.AccentColor.shared
 
     var body: some View {
         HStack(spacing: 10) {
@@ -33,11 +32,11 @@ struct ServiceListItem: View {
                 Button(action: onEdit) {
                     Image(systemName: "pencil")
                         .font(.system(size: AppTheme.actionButtonSize))
-                        .foregroundColor(accentColor.current)
+                        .foregroundColor(.accentColor)
                         .frame(width: 28, height: 28)
                         .background(
                             Circle()
-                                .fill(isEditHovering ? accentColor.current.opacity(AppTheme.buttonHoverBackground) : AppTheme.clearColor)
+                                .fill(isEditHovering ? Color.accentColor.opacity(AppTheme.buttonHoverBackground) : AppTheme.clearColor)
                         )
                 }
                 .buttonStyle(.plain)
@@ -68,7 +67,7 @@ struct ServiceListItem: View {
         .contentShape(Rectangle())
         .listRowBackground(
             RoundedRectangle(cornerRadius: AppTheme.itemCornerRadius)
-                .fill((isSelected || isHovering) ? accentColor.current.opacity(AppTheme.itemSelectedBackground) : AppTheme.clearColor)
+                .fill((isSelected || isHovering) ? Color.accentColor.opacity(AppTheme.itemSelectedBackground) : AppTheme.clearColor)
         )
         // .listRowInsets(EdgeInsets())
         .onHover { hovering in

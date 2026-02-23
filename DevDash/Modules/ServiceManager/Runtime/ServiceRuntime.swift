@@ -151,7 +151,9 @@ class ServiceRuntime: ObservableObject, Identifiable, Hashable, OutputViewDataSo
 
     private func startFlushTimer() {
         let timer = DispatchSource.makeTimerSource(queue: .main)
-        timer.schedule(deadline: .now() + .milliseconds(100), repeating: .milliseconds(100))
+        // Flush every 250ms instead of 100ms to reduce UI update frequency
+        // This significantly reduces CPU usage while keeping logs responsive
+        timer.schedule(deadline: .now() + .milliseconds(250), repeating: .milliseconds(250))
         timer.setEventHandler { [weak self] in
             self?.flushLogBuffer()
         }
@@ -344,11 +346,23 @@ class ServiceRuntime: ObservableObject, Identifiable, Hashable, OutputViewDataSo
                 self.pipe = pipe
             }
 
-            // Live log streaming — append to buffer only; timer flushes to UI at 100ms intervals
-            pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
+            // Live log streaming using readabilityHandler
+            // readabilityHandler is efficient - only called when data is actually ready
+            let fileHandle = pipe.fileHandleForReading
+            fileHandle.readabilityHandler = { [weak self] handle in
                 guard let self else { return }
+
+                // Read ALL available data in one go to minimize handler invocations
+                // We use availableData here which is safe because:
+                // 1. We're already inside readabilityHandler (data IS available)
+                // 2. This won't spin-loop like the old code (handler only fires when data ready)
+                // 3. Reading everything at once means fewer handler calls = lower CPU
                 let data = handle.availableData
-                guard data.count > 0, let output = String(data: data, encoding: .utf8) else { return }
+
+                guard data.count > 0, let output = String(data: data, encoding: .utf8) else {
+                    return
+                }
+
                 Task { @MainActor [weak self] in
                     self?.logBuffer += output
                 }
@@ -361,9 +375,16 @@ class ServiceRuntime: ObservableObject, Identifiable, Hashable, OutputViewDataSo
             process.terminationHandler = { [weak self] proc in
                 Task { @MainActor [weak self] in
                     guard let self else { return }
+
+                    // CRITICAL: Clean up pipe and handler FIRST to prevent leaks
+                    self.pipe?.fileHandleForReading.readabilityHandler = nil
+                    try? self.pipe?.fileHandleForReading.close()
+                    self.pipe = nil
+
                     self.stopFlushTimer()
                     self.logBuffer += "\n[Process terminated with code \(proc.terminationStatus)]\n"
                     self.flushLogBuffer()
+
                     if self.seenEADDRINUSE {
                         self.detectPortConflict()
                     }
@@ -545,7 +566,10 @@ class ServiceRuntime: ObservableObject, Identifiable, Hashable, OutputViewDataSo
 
         processingAction = .stopping
         stopFlushTimer()
+
+        // Clean up readability handler
         pipe?.fileHandleForReading.readabilityHandler = nil
+
         let config = self.config
 
         // Case 1: custom stop command
