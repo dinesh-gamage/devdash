@@ -256,10 +256,6 @@ struct CategoryDetailView: View {
                             manager.cancelDeletion()
                         } : nil
                     )
-                    .frame(maxWidth: 600, maxHeight: 500)
-                    .background(Color(NSColor.windowBackgroundColor))
-                    .cornerRadius(12)
-                    .shadow(radius: 20)
                 }
             }
         }

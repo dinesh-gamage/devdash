@@ -80,38 +80,42 @@ struct DeletionProgressView: View {
     }
 
     var body: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 16) {
             // Title
             Text(allCompleted ? "Cleanup Complete" : "Cleaning Up...")
                 .font(.headline)
                 .foregroundColor(.primary)
 
-            // Progress bar
-            ProgressView(value: progress, total: 1.0)
-                .progressViewStyle(.linear)
+            // Progress bar (hide when complete)
+            if !allCompleted {
+                ProgressView(value: progress, total: 1.0)
+                    .progressViewStyle(.linear)
+            }
 
             // Status text
             if allCompleted {
-                VStack(spacing: 2) {
+                VStack(spacing: 6) {
                     Text("Deleted \(totalDeleted) of \(items.count) items")
-                        .font(.caption)
+                        .font(.body)
                         .foregroundColor(.secondary)
 
-                    if totalFailed > 0 {
-                        Text("\(totalFailed) items failed")
-                            .font(.caption2)
-                            .foregroundColor(.red)
-                    }
+                    HStack(spacing: 8) {
+                        if totalSize > 0 {
+                            Text(ByteCountFormatter.string(fromByteCount: totalSize, countStyle: .file) + " freed")
+                                .font(.caption)
+                                .foregroundColor(.green)
+                        }
 
-                    if totalSize > 0 {
-                        Text(ByteCountFormatter.string(fromByteCount: totalSize, countStyle: .file) + " freed")
-                            .font(.caption2)
-                            .foregroundColor(.green)
+                        if totalFailed > 0 {
+                            Text("(\(totalFailed) failed)")
+                                .font(.caption)
+                                .foregroundColor(.red)
+                        }
                     }
                 }
             } else {
-                Text("\(totalDeleted) of \(items.count) items deleted")
-                    .font(.caption)
+                Text("\(totalDeleted) of \(items.count) items")
+                    .font(.body)
                     .foregroundColor(.secondary)
             }
 
@@ -132,13 +136,20 @@ struct DeletionProgressView: View {
                         variant: .danger
                     ) {
                         cancel()
-                        onClose()  // Close popup on cancel
+                        onClose()
                     }
                 }
             }
         }
         .padding(16)
-        .frame(width: 280)
+        .frame(width: 300)
+        .background(Color(NSColor.controlBackgroundColor).opacity(0.95))
+        .cornerRadius(12)
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color.primary.opacity(0.1), lineWidth: 1)
+        )
+        .shadow(color: Color.black.opacity(0.2), radius: 10, x: 0, y: 4)
     }
 }
 
