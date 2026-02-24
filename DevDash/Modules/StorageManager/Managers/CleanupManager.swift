@@ -571,6 +571,18 @@ class CleanupManager: ObservableObject {
         var errors: [String] = []
         var freedSpace: Int64 = 0
 
+        // Check if file exists before attempting deletion
+        guard fileManager.fileExists(atPath: item.path.path) else {
+            // File doesn't exist (might have been deleted with parent folder)
+            // Consider this a success - file is already gone
+            return CleanupResult(
+                category: item.category,
+                freedSpace: 0,  // Don't count size since it was already deleted
+                itemsCleaned: 1,  // Count as cleaned
+                errors: []
+            )
+        }
+
         do {
             switch operation {
             case .moveToTrash:

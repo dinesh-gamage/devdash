@@ -131,6 +131,12 @@ struct DeletionItemRow: View {
                     .fontWeight(.medium)
                     .foregroundColor(textColor)
 
+                // Show full path
+                Text(compactPath)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+
                 HStack(spacing: 8) {
                     Text(itemInfo.formattedSize)
                         .font(.caption)
@@ -175,6 +181,15 @@ struct DeletionItemRow: View {
                 .foregroundColor(.red)
                 .font(.body)
         }
+    }
+
+    private var compactPath: String {
+        let homeDir = FileManager.default.homeDirectoryForCurrentUser.path
+        if itemInfo.path.hasPrefix(homeDir) {
+            let relative = String(itemInfo.path.dropFirst(homeDir.count))
+            return "~" + relative
+        }
+        return itemInfo.path
     }
 
     private var statusMessage: String {

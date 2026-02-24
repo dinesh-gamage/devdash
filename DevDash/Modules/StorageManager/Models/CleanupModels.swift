@@ -139,7 +139,7 @@ struct CleanupItem: Identifiable, Hashable {
 // MARK: - File Tree Node (for hierarchical display)
 
 class FileTreeNode: Identifiable {
-    let id = UUID()
+    let id: String  // Path-based stable ID
     let name: String
     let path: URL
     let size: Int64
@@ -164,6 +164,7 @@ class FileTreeNode: Identifiable {
     }
 
     init(name: String, path: URL, size: Int64, modifiedDate: Date?, isDirectory: Bool, children: [FileTreeNode]? = nil, item: CleanupItem? = nil) {
+        self.id = path.path  // Stable ID based on path
         self.name = name
         self.path = path
         self.size = size

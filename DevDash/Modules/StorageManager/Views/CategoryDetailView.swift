@@ -18,39 +18,35 @@ struct FileTreeRow: View {
         if let item = node.item {
             return manager.isItemSelected(id: item.id)
         } else {
-            // Directory: selected if all children are selected
-            guard let children = node.children, !children.isEmpty else { return false }
-            return children.allSatisfy { child in
-                if let item = child.item {
-                    return manager.isItemSelected(id: item.id)
-                }
-                return false
-            }
+            // Directory: selected if all descendant files are selected
+            let descendantItems = node.allDescendantItems
+            guard !descendantItems.isEmpty else { return false }
+            return descendantItems.allSatisfy { manager.isItemSelected(id: $0.id) }
         }
+    }
+
+    private var isPartiallySelected: Bool {
+        guard node.isDirectory else { return false }
+        let descendantItems = node.allDescendantItems
+        guard !descendantItems.isEmpty else { return false }
+        let selectedCount = descendantItems.filter { manager.isItemSelected(id: $0.id) }.count
+        return selectedCount > 0 && selectedCount < descendantItems.count
     }
 
     var body: some View {
         HStack(spacing: 12) {
-            // SAFETY: Only show checkbox for actual files, not directories
-            if node.item != nil {
-                // File checkbox
-                Toggle("", isOn: Binding(
-                    get: { isSelected },
-                    set: { _ in
-                        toggleNode()
-                    }
-                ))
-                .toggleStyle(.checkbox)
-                .labelsHidden()
-                .buttonStyle(.plain)
-                .onTapGesture {} // Prevent tap from propagating to list row
-            } else {
-                // Directory: Show passive selection indicator
-                Text(directorySelectionText)
-                    .font(.caption2)
-                    .foregroundColor(directorySelectionColor)
-                    .frame(width: 20, alignment: .center)
-            }
+            // Checkbox for both files and directories
+            Toggle("", isOn: Binding(
+                get: { isSelected },
+                set: { _ in
+                    toggleNode()
+                }
+            ))
+            .toggleStyle(.checkbox)
+            .labelsHidden()
+            .buttonStyle(.plain)
+            .opacity(isPartiallySelected ? 0.5 : 1.0)
+            .onTapGesture {} // Prevent tap from propagating to list row
 
             // Icon
             Image(systemName: node.isDirectory ? "folder.fill" : "doc.fill")
@@ -86,49 +82,30 @@ struct FileTreeRow: View {
         .padding(.vertical, 4)
     }
 
-    // Directory selection indicator
-    private var directorySelectionText: String {
-        guard let children = node.children else { return "" }
-        let selectedCount = children.filter { child in
-            if let item = child.item {
-                return manager.isItemSelected(id: item.id)
-            }
-            return false
-        }.count
-
-        if selectedCount == 0 {
-            return ""
-        } else if selectedCount == children.count {
-            return "✓"
-        } else {
-            return "\(selectedCount)"
-        }
-    }
-
-    private var directorySelectionColor: Color {
-        guard let children = node.children else { return .clear }
-        let selectedCount = children.filter { child in
-            if let item = child.item {
-                return manager.isItemSelected(id: item.id)
-            }
-            return false
-        }.count
-
-        if selectedCount == 0 {
-            return .clear
-        } else if selectedCount == children.count {
-            return .green
-        } else {
-            return .orange
-        }
-    }
-
-    // SAFETY: Only toggle individual files, never directories
+    // Toggle selection for both files and directories
     private func toggleNode() {
         if let item = node.item {
+            // Toggle individual file
             manager.toggleItemSelection(id: item.id)
+        } else {
+            // Toggle all descendant files in directory
+            let descendantItems = node.allDescendantItems
+            let allSelected = descendantItems.allSatisfy { manager.isItemSelected(id: $0.id) }
+
+            for item in descendantItems {
+                if allSelected {
+                    // Deselect all
+                    if manager.isItemSelected(id: item.id) {
+                        manager.toggleItemSelection(id: item.id)
+                    }
+                } else {
+                    // Select all
+                    if !manager.isItemSelected(id: item.id) {
+                        manager.toggleItemSelection(id: item.id)
+                    }
+                }
+            }
         }
-        // Directories have no checkbox, so this is never called for them
     }
 }
 
@@ -142,12 +119,11 @@ struct CategoryDetailView: View {
     @State private var showingFinalDeleteConfirmation = false
     @ObservedObject private var settingsManager = StorageScanSettingsManager.shared
 
+    // Cache tree to prevent rebuilding on every selection change
+    @State private var treeNodes: [FileTreeNode] = []
+
     var categoryItems: [CleanupItem] {
         manager.items(for: category)
-    }
-
-    var treeNodes: [FileTreeNode] {
-        FileTreeNode.buildTree(from: categoryItems, selectedIds: manager.selectedItemIds)
     }
 
     var selectedItemsInCategory: [CleanupItem] {
@@ -204,6 +180,16 @@ struct CategoryDetailView: View {
                 FileTreeRow(node: node, manager: manager)
             }
             .listStyle(.inset(alternatesRowBackgrounds: true))
+            .onAppear {
+                // Build tree on first appearance
+                if treeNodes.isEmpty {
+                    treeNodes = FileTreeNode.buildTree(from: categoryItems, selectedIds: manager.selectedItemIds)
+                }
+            }
+            .onChange(of: categoryItems.count) {
+                // Rebuild tree only when items change, not on selection changes
+                treeNodes = FileTreeNode.buildTree(from: categoryItems, selectedIds: manager.selectedItemIds)
+            }
 
             Divider()
 
