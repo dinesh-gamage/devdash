@@ -251,7 +251,10 @@ struct CategoryDetailView: View {
                         items: manager.deletionItems,
                         onClose: {
                             manager.showingDeletionProgress = false
-                        }
+                        },
+                        onCancel: manager.isProcessing ? {
+                            manager.cancelDeletion()
+                        } : nil
                     )
                     .frame(maxWidth: 600, maxHeight: 500)
                     .background(Color(NSColor.windowBackgroundColor))

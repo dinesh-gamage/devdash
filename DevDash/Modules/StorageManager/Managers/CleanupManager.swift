@@ -66,6 +66,10 @@ class CleanupManager: ObservableObject {
     private let safetyDatabase = SafetyDatabase.shared
     private var scanTask: Task<Void, Never>?
 
+    // Deletion cancellation
+    private var deletionTask: Task<Void, Never>?
+    private var deletionCancelled = false
+
     // Deduplication: Track files already categorized
     private var categorizedPaths: Set<String> = []
 
@@ -470,6 +474,7 @@ class CleanupManager: ObservableObject {
     /// Clean selected items
     func cleanSelected(operation: CleanupOperation? = nil) async -> [CleanupResult] {
         isProcessing = true
+        deletionCancelled = false
 
         // Get all selected items from all categories
         var selectedItems: [CleanupItem] = []
@@ -500,6 +505,11 @@ class CleanupManager: ObservableObject {
 
         // Delete items one by one with progress tracking
         for item in selectedItems {
+            // Check if deletion was cancelled
+            if deletionCancelled {
+                break
+            }
+
             // Update status to deleting
             await MainActor.run {
                 if let index = deletionItems.firstIndex(where: { $0.id == item.id }) {
@@ -563,6 +573,11 @@ class CleanupManager: ObservableObject {
         refreshCategories()
 
         return results
+    }
+
+    /// Cancel ongoing deletion
+    func cancelDeletion() {
+        deletionCancelled = true
     }
 
     /// Delete a single item and return result
