@@ -62,6 +62,9 @@ struct DevDashApp: App {
         // Register Resource Monitor module
         registry.register(ResourceMonitorModule())
 
+        // Register Storage Manager module
+        registry.register(StorageManagerModule())
+
         // Register Settings module
         registry.register(SettingsModule())
     }

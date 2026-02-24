@@ -56,6 +56,7 @@ struct SettingsSidebarView: View {
     // Define setting categories as simple items
     let categories: [SettingCategory] = [
         SettingCategory(id: "About", name: "About", icon: "info.circle"),
+        SettingCategory(id: "StorageScan", name: "Storage Scan", icon: "externaldrive.badge.magnifyingglass"),
         SettingCategory(id: "Backup", name: "Backup", icon: "arrow.triangle.2.circlepath")
     ]
 
@@ -112,6 +113,8 @@ struct SettingsDetailView: View {
         switch state.selectedCategory {
         case "About":
             AboutDetailView()
+        case "StorageScan":
+            StorageScanSettingsView()
         case "Backup":
             BackupDetailView()
         default:

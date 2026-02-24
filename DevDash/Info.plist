@@ -6,5 +6,11 @@
 	<string>DevDash needs permission to open Terminal windows for SSH connections to your EC2 instances.</string>
 	<key>NSAppleScriptEnabled</key>
 	<true/>
+	<key>NSDownloadsFolderUsageDescription</key>
+	<string>DevDash needs access to scan your Downloads folder for old files that can be cleaned up to free disk space.</string>
+	<key>NSDesktopFolderUsageDescription</key>
+	<string>DevDash needs access to scan your Desktop folder for large files and duplicates to help you reclaim disk space.</string>
+	<key>NSDocumentsFolderUsageDescription</key>
+	<string>DevDash needs access to scan your Documents folder for large files and duplicates to help you free up disk space.</string>
 </dict>
 </plist>
