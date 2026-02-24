@@ -50,9 +50,14 @@ class StorageScanSettingsManager: ObservableObject {
     ]
 
     private init() {
-        // DEV: Reset to defaults (no backward compatibility during development)
-        self.settings = .default
-        save()
+        // Load saved settings, or use defaults if not found
+        if let data = UserDefaults.standard.data(forKey: userDefaultsKey),
+           let decoded = try? JSONDecoder().decode(StorageScanSettings.self, from: data) {
+            self.settings = decoded
+        } else {
+            self.settings = .default
+            save()
+        }
     }
 
     // MARK: - Persistence
@@ -160,8 +165,6 @@ class StorageScanSettingsManager: ObservableObject {
     // MARK: - Validation
 
     private func validateCustomPath(_ path: String) throws {
-        let url = URL(fileURLWithPath: path)
-
         // Check if path exists
         guard fileManager.fileExists(atPath: path) else {
             throw SettingsError.pathDoesNotExist
@@ -222,6 +225,27 @@ class StorageScanSettingsManager: ObservableObject {
         }
 
         return paths
+    }
+
+    func getAllEnabledLocations() -> [ScanLocation] {
+        var locations: [ScanLocation] = []
+
+        // Add default enabled locations
+        locations.append(contentsOf: settings.scanLocations.filter { $0.isEnabled })
+
+        // Add custom paths as locations
+        for customPath in settings.customPaths {
+            let url = URL(fileURLWithPath: customPath)
+            locations.append(ScanLocation(
+                id: customPath,
+                path: customPath,
+                name: url.lastPathComponent,
+                isEnabled: true,
+                isCustom: true
+            ))
+        }
+
+        return locations
     }
 }
 

@@ -94,7 +94,33 @@ class CleanupManager: ObservableObject {
         itemsByCategory.removeAll()
         selectedItemIds.removeAll()
         categorizedPaths.removeAll()  // Clear deduplication tracking
+
+        // Initialize all categories as empty (not yet scanned)
         categories = CleanupCategory.allCases.map { .empty(category: $0) }
+
+        // Initialize location scan infos
+        var scanTargets: [LocationScanInfo] = []
+
+        // Add "System" target for system scans
+        scanTargets.append(LocationScanInfo(
+            id: "system",
+            name: "System",
+            path: "/System",
+            status: .pending
+        ))
+
+        // Add enabled user folders
+        let enabledLocations = settingsManager.getAllEnabledLocations()
+        for location in enabledLocations {
+            scanTargets.append(LocationScanInfo(
+                id: location.id,
+                name: location.name,
+                path: location.path,
+                status: .pending
+            ))
+        }
+
+        locationScanInfos = scanTargets
 
         scanTask = Task {
             // Get enabled categories
@@ -112,15 +138,26 @@ class CleanupManager: ObservableObject {
                 .downloads
             ].filter { enabledCategories.contains($0) }
 
+            // Mark "System" as scanning
+            await updateLocationScanStatus("system", status: .scanning(currentCategory: "System"))
+
+            var systemFilesFound = 0
+            var systemSizeFound: Int64 = 0
+
             for category in systemCategories {
                 guard !Task.isCancelled else {
                     await MainActor.run {
                         scanState = .idle
+                        refreshCategories()
                     }
                     return
                 }
 
+                await updateLocationScanStatus("system", status: .scanning(currentCategory: category.name))
                 let items = await scanCategoryWithDedup(category)
+
+                systemFilesFound += items.count
+                systemSizeFound += items.reduce(0) { $0 + $1.size }
 
                 // Track all categorized paths
                 await MainActor.run {
@@ -130,12 +167,16 @@ class CleanupManager: ObservableObject {
                 }
             }
 
+            // Mark "System" as completed
+            await updateLocationScanStatus("system", status: .completed(filesFound: systemFilesFound, sizeFound: systemSizeFound))
+
             // STEP 2: Scan user folders for cache/log/temp patterns
             // These get added to system categories (systemCaches or systemJunk)
             if enabledCategories.contains(.systemCaches) || enabledCategories.contains(.systemJunk) {
                 guard !Task.isCancelled else {
                     await MainActor.run {
                         scanState = .idle
+                        refreshCategories()
                     }
                     return
                 }
@@ -148,6 +189,7 @@ class CleanupManager: ObservableObject {
                 guard !Task.isCancelled else {
                     await MainActor.run {
                         scanState = .idle
+                        refreshCategories()
                     }
                     return
                 }
@@ -160,9 +202,18 @@ class CleanupManager: ObservableObject {
                 }
             }
 
+            // Mark all remaining categories as complete (scanned but no results)
             await MainActor.run {
                 scanState = .completed
                 refreshCategories()
+            }
+        }
+    }
+
+    private func updateLocationScanStatus(_ locationId: String, status: LocationScanStatus) async {
+        await MainActor.run {
+            if let index = locationScanInfos.firstIndex(where: { $0.id == locationId }) {
+                locationScanInfos[index].status = status
             }
         }
     }
@@ -179,7 +230,7 @@ class CleanupManager: ObservableObject {
     /// Scan user folders for cache/log/temp files and add to system categories
     private func scanUserFoldersForSystemFiles() async {
         // Get user-selected scan locations
-        let enabledPaths = settingsManager.getAllEnabledPaths()
+        let enabledLocations = settingsManager.getAllEnabledLocations()
 
         // File patterns for cache files
         let cachePatterns = [
@@ -199,11 +250,18 @@ class CleanupManager: ObservableObject {
             scanState = .scanning(progress: "Scanning user folders for cache/log/temp files...", currentPath: nil)
         }
 
-        for locationURL in enabledPaths {
+        for location in enabledLocations {
+            let locationURL = URL(fileURLWithPath: location.path)
             guard fileManager.fileExists(atPath: locationURL.path) else { continue }
 
             // Check cancellation
             guard !Task.isCancelled else { return }
+
+            // Mark location as scanning
+            await updateLocationScanStatus(location.id, status: .scanning(currentCategory: "Caches & Junk"))
+
+            var locationFilesFound = 0
+            var locationSizeFound: Int64 = 0
 
             // Scan for cache files
             do {
@@ -244,6 +302,9 @@ class CleanupManager: ObservableObject {
                     }
                     return false
                 }
+
+                locationFilesFound += cacheItems.count
+                locationSizeFound += cacheItems.reduce(0) { $0 + $1.size }
 
                 await MainActor.run {
                     if !cacheItems.isEmpty {
@@ -297,6 +358,9 @@ class CleanupManager: ObservableObject {
                     return false
                 }
 
+                locationFilesFound += logTempItems.count
+                locationSizeFound += logTempItems.reduce(0) { $0 + $1.size }
+
                 await MainActor.run {
                     if !logTempItems.isEmpty {
                         itemsByCategory[.systemJunk, default: []].append(contentsOf: logTempItems)
@@ -308,6 +372,9 @@ class CleanupManager: ObservableObject {
             } catch {
                 // Continue on errors
             }
+
+            // Mark location as completed
+            await updateLocationScanStatus(location.id, status: .completed(filesFound: locationFilesFound, sizeFound: locationSizeFound))
         }
 
         await MainActor.run {
@@ -602,6 +669,7 @@ class CleanupManager: ObservableObject {
 
     /// Scan category with deduplication - filters out already categorized files
     private func scanCategoryWithDedup(_ category: CleanupCategory) async -> [CleanupItem] {
+        // Mark category as scanning
         await MainActor.run {
             currentScanningCategory = category
             scanState = .scanning(progress: category.scanningMessage, currentPath: nil)
@@ -616,6 +684,7 @@ class CleanupManager: ObservableObject {
                 !categorizedPaths.contains(item.path.path)
             }
 
+            // Mark category as complete with results
             await MainActor.run {
                 // Add items to category dictionary
                 itemsByCategory[category, default: []].append(contentsOf: newItems)
@@ -632,9 +701,12 @@ class CleanupManager: ObservableObject {
 
             return newItems
         } catch {
+            // Mark category as complete with error
             await MainActor.run {
                 updateCategory(
                     category,
+                    totalSize: 0,
+                    itemCount: 0,
                     isScanning: false,
                     scanError: error.localizedDescription
                 )

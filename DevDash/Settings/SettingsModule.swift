@@ -56,7 +56,7 @@ struct SettingsSidebarView: View {
     // Define setting categories as simple items
     let categories: [SettingCategory] = [
         SettingCategory(id: "About", name: "About", icon: "info.circle"),
-        SettingCategory(id: "StorageScan", name: "Storage Scan", icon: "externaldrive.badge.magnifyingglass"),
+        SettingCategory(id: "StorageScan", name: "Storage Scan", icon: "internaldrive"),
         SettingCategory(id: "Backup", name: "Backup", icon: "arrow.triangle.2.circlepath")
     ]
 
