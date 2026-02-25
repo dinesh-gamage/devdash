@@ -156,14 +156,11 @@ struct AboutDetailView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
                     // App Icon and Name
-                    HStack(spacing: 24) {
-                        Image(systemName: "square.grid.2x2.fill")
-                        .font(.title2)
-                        .foregroundStyle(.linearGradient(
-                            colors: [.blue, .purple],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        ))
+                    HStack(spacing: 60) {
+                        Image("DevDashLogo")
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                            .frame(width: 60, height: 60)
 
                         VStack(alignment: .leading, spacing: 8) {
                             Text("DevDash")

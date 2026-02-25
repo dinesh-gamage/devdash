@@ -44,13 +44,10 @@ struct ContentView: View {
                     VStack(alignment: .leading, spacing: 6) {
                         HStack(spacing: 12) {
                             // DevDash logo
-                            Image(systemName: "square.grid.2x2.fill")
-                                .font(.title3)
-                                .foregroundStyle(.linearGradient(
-                                    colors: [.blue, .purple],
-                                    startPoint: .topLeading,
-                                    endPoint: .bottomTrailing
-                                ))
+                            Image("DevDashLogo")
+                                .resizable()
+                                .aspectRatio(contentMode: .fit)
+                                .frame(width: 24, height: 24)
 
                             Text("DevDash")
                                 .font(AppTheme.h1)
@@ -229,93 +226,6 @@ struct ModuleListItem: View {
         .onHover { hovering in
             isHovered = hovering
         }
-    }
-}
-
-// MARK: - Dashboard View
-
-struct DashboardView: View {
-    let onSelectModule: (String) -> Void
-    @ObservedObject var registry = ModuleRegistry.shared
-    @ObservedObject var serviceState = ServiceManagerState.shared
-    @ObservedObject var ec2State = EC2ManagerState.shared
-
-    var body: some View {
-        ScrollView {
-            VStack(spacing: 20) {
-                // Compact header
-                HStack(spacing: 12) {
-                    Image(systemName: "square.grid.2x2.fill")
-                        .font(.title2)
-                        .foregroundStyle(.linearGradient(
-                            colors: [.blue, .purple],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        ))
-
-                    Text("Welcome back, \(NSFullUserName())")
-                        .font(.title3)
-                        .foregroundColor(.secondary)
-
-                    Spacer()
-                }
-                .padding(.horizontal, 20)
-                .padding(.top, 20)
-
-                // Main layout: Left column + Right column
-                HStack(alignment: .top, spacing: 16) {
-                    // Left column: Count widgets + Dashboard widgets
-                    VStack(alignment: .leading, spacing: 16) {
-                        // Count Widgets Row
-                        HStack(spacing: 16) {
-                            ServiceCountWidget(onTap: { onSelectModule("service-manager") })
-                            EC2CountWidget(onTap: { onSelectModule("ec2-manager") })
-                            CredentialsCountWidget(onTap: { onSelectModule("credentials-manager") })
-                            AWSVaultCountWidget(onTap: { onSelectModule("aws-vault-manager") })
-                        }
-
-                        // Dashboard Widgets Row
-                        HStack(alignment: .top, spacing: 16) {
-                            // Service Manager Widget
-                            ServiceDashboardWidget(
-                                onModuleTap: { onSelectModule("service-manager") }
-                            )
-
-                            // EC2 Manager Widget
-                            EC2DashboardWidget(
-                                onModuleTap: { onSelectModule("ec2-manager") }
-                            )
-                        }
-                        .frame(height: 350)
-                    }
-                    .frame(maxWidth: .infinity)
-
-                    // Right column: DevDash Resources + System Resources
-                    VStack(spacing: 16) {
-                        // DevDash Resource Widget
-                        DevDashResourceWidget(onTap: {
-                            ResourceMonitorState.shared.selectedView = .devdash
-                            onSelectModule("resource-monitor")
-                        })
-
-                        // Resource Monitor Widget
-                        ResourceMonitorWidget(
-                            isDashboard: true,
-                            onModuleTap: {
-                                ResourceMonitorState.shared.selectedView = .overall
-                                onSelectModule("resource-monitor")
-                            }
-                        )
-                        .frame(height: 350)
-                    }
-                    .frame(width: 350)
-                }
-                .padding(.horizontal, 20)
-                .padding(.bottom, 20)
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(NSColor.windowBackgroundColor))
     }
 }
 

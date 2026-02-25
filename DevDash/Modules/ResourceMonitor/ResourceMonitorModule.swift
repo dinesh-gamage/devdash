@@ -19,9 +19,9 @@ enum ResourceMonitorView: String, CaseIterable, Identifiable {
     var icon: String {
         switch self {
         case .overall:
-            return "chart.bar.fill"
+            return "cpu"
         case .devdash:
-            return "app.badge.fill"
+            return "DevDashLogo"
         }
     }
 }
@@ -92,7 +92,7 @@ struct ResourceMonitorSidebarView: View {
             selectedItem: $state.selectedView,
             itemContent: { view, isSelected in
                 ModuleSidebarListItem(
-                    icon: .image(systemName: view.icon, color: .orange),
+                    icon: view.icon == "DevDashLogo" ? .assetImage(name: "DevDashLogo") : .image(systemName: view.icon, color: .orange),
                     title: view.rawValue,
                     isSelected: isSelected,
                     onTap: {

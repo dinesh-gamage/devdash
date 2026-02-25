@@ -12,6 +12,7 @@ import SwiftUI
 enum ListItemIcon {
     case status(color: Color)
     case image(systemName: String, color: Color)
+    case assetImage(name: String)
     case none
 }
 
@@ -104,6 +105,11 @@ struct ModuleSidebarListItem: View {
                 Image(systemName: systemName)
                     .font(.system(size: 16))
                     .foregroundColor(color)
+                    .frame(width: 20, height: 20)
+            case .assetImage(let name):
+                Image(name)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
                     .frame(width: 20, height: 20)
             case .none:
                 EmptyView()
