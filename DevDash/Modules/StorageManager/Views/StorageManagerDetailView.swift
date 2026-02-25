@@ -48,22 +48,18 @@ struct InitialStateView: View {
     var body: some View {
         VStack(spacing: 0) {
             // Header with action buttons
-            HStack {
-                Text("Storage Manager")
-                    .font(AppTheme.h2)
-
-                Spacer()
-
-                VariantButton(
-                    "Start Scan",
-                    icon: "magnifyingglass",
-                    variant: .primary
-                ) {
-                    state.startScan()
+            ModuleDetailHeader(
+                title: "Storage Manager",
+                actionButtons: {
+                    VariantButton(
+                        "Start Scan",
+                        icon: "magnifyingglass",
+                        variant: .primary
+                    ) {
+                        state.startScan()
+                    }
                 }
-            }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 16)
+            )
             .background(Color.secondary.opacity(0.05))
 
             Divider()
@@ -129,22 +125,18 @@ struct ScanningStateView: View {
     var body: some View {
         VStack(spacing: 0) {
             // Header with Stop button
-            HStack {
-                Text("Storage Manager")
-                    .font(AppTheme.h2)
-
-                Spacer()
-
-                VariantButton(
-                    "Stop Scan",
-                    icon: "stop.circle",
-                    variant: .danger
-                ) {
-                    state.stopScan()
+            ModuleDetailHeader(
+                title: "Storage Manager",
+                actionButtons: {
+                    VariantButton(
+                        "Stop Scan",
+                        icon: "stop.circle",
+                        variant: .danger
+                    ) {
+                        state.stopScan()
+                    }
                 }
-            }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 16)
+            )
             .background(Color.secondary.opacity(0.05))
 
             Divider()
@@ -205,8 +197,6 @@ struct ResultsStateView: View {
                     }
                 }
             )
-            .padding(.horizontal, 20)
-            .padding(.vertical, 16)
             .background(Color.secondary.opacity(0.05))
 
             Divider()

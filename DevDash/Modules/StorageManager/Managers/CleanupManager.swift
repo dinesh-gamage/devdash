@@ -128,8 +128,15 @@ class CleanupManager: ObservableObject {
 
         scanTask = Task {
             // Get enabled categories
-            let enabledCategories = CleanupCategory.allCases.filter {
+            var enabledCategories = CleanupCategory.allCases.filter {
                 settingsManager.isCategoryEnabled($0)
+            }
+
+            // IMPORTANT: If deletion mode is "Move to Trash", always skip the Trash category
+            // (no point scanning trash if we're moving deleted files to trash)
+            // If deletion mode is "Delete Permanently", respect the setting
+            if settingsManager.settings.deletionMode == .moveToTrash {
+                enabledCategories = enabledCategories.filter { $0 != .trash }
             }
 
             // STEP 1: Scan system categories first (priority order)

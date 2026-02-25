@@ -137,40 +137,25 @@ struct CategoryDetailView: View {
     var body: some View {
         VStack(spacing: 0) {
             // Header with back button and select all
-            HStack {
-                HStack(spacing: 6) {
-                    Image(systemName: "chevron.left")
-                        .font(.caption)
-                    Text("Back")
-                        .font(.body)
-                }
-                .contentShape(Rectangle())
-                .onTapGesture(perform: onBack)
-
-                Spacer()
-
-                Text(category.name)
-                    .font(.headline)
-                    .foregroundColor(.primary)
-
-                Spacer()
-
-                // Select All toggle
-                Button(action: {
-                    let allSelected = selectedItemsInCategory.count == categoryItems.count
-                    manager.toggleCategory(category, selected: !allSelected)
-                }) {
-                    HStack(spacing: 6) {
-                        Image(systemName: selectedItemsInCategory.count == categoryItems.count && categoryItems.count > 0 ? "checkmark.square.fill" : "square")
-                            .foregroundColor(selectedItemsInCategory.count == categoryItems.count && categoryItems.count > 0 ? .purple : .secondary)
-                        Text("Select All")
-                            .font(.caption)
+            ModuleDetailHeader(
+                title: category.name,
+                onBack: onBack,
+                actionButtons: {
+                    // Select All toggle
+                    Button(action: {
+                        let allSelected = selectedItemsInCategory.count == categoryItems.count
+                        manager.toggleCategory(category, selected: !allSelected)
+                    }) {
+                        HStack(spacing: 6) {
+                            Image(systemName: selectedItemsInCategory.count == categoryItems.count && categoryItems.count > 0 ? "checkmark.square.fill" : "square")
+                                .foregroundColor(selectedItemsInCategory.count == categoryItems.count && categoryItems.count > 0 ? .purple : .secondary)
+                            Text("Select All")
+                                .font(.caption)
+                        }
                     }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
-            }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 16)
+            )
             .background(Color.secondary.opacity(0.05))
 
             Divider()

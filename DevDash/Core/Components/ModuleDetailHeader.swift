@@ -32,27 +32,43 @@ struct ModuleDetailHeader<ActionContent: View, StatusContent: View>: View {
     let actionButtons: () -> ActionContent
     let statusContent: () -> StatusContent
     let metadata: [MetadataRow]
+    let onBack: (() -> Void)?
 
     @State private var isMetadataExpanded: Bool = true
 
     init(
         title: String,
         metadata: [MetadataRow] = [],
+        onBack: (() -> Void)? = nil,
         @ViewBuilder actionButtons: @escaping () -> ActionContent = { EmptyView() },
         @ViewBuilder statusContent: @escaping () -> StatusContent = { EmptyView() }
     ) {
         self.title = title
         self.metadata = metadata
+        self.onBack = onBack
         self.actionButtons = actionButtons
         self.statusContent = statusContent
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 16) {
             // Title and action buttons
             HStack {
-                Text(title)
-                    .font(AppTheme.h2)
+                // Back button (if provided)
+                if let onBack = onBack {
+                    HStack(spacing: 6) {
+                        Image(systemName: "chevron.left")
+                            .font(.body)
+                            .foregroundColor(.primary)
+                        Text(title)
+                            .font(AppTheme.h2)
+                    }
+                    .contentShape(Rectangle())
+                    .onTapGesture(perform: onBack)
+                } else {
+                    Text(title)
+                        .font(AppTheme.h2)
+                }
 
                 Spacer()
 
@@ -128,10 +144,12 @@ extension ModuleDetailHeader where StatusContent == EmptyView {
     init(
         title: String,
         metadata: [MetadataRow] = [],
+        onBack: (() -> Void)? = nil,
         @ViewBuilder actionButtons: @escaping () -> ActionContent
     ) {
         self.title = title
         self.metadata = metadata
+        self.onBack = onBack
         self.actionButtons = actionButtons
         self.statusContent = { EmptyView() }
     }
@@ -141,10 +159,12 @@ extension ModuleDetailHeader where StatusContent == EmptyView {
 extension ModuleDetailHeader where ActionContent == EmptyView, StatusContent == EmptyView {
     init(
         title: String,
-        metadata: [MetadataRow] = []
+        metadata: [MetadataRow] = [],
+        onBack: (() -> Void)? = nil
     ) {
         self.title = title
         self.metadata = metadata
+        self.onBack = onBack
         self.actionButtons = { EmptyView() }
         self.statusContent = { EmptyView() }
     }

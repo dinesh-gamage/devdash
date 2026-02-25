@@ -100,7 +100,7 @@ class StorageManagerState: ObservableObject {
 
     func stopScan() {
         manager.stopScan()
-        viewState = .initial
+        // Let the sink handler decide viewState based on scan results
     }
 
     func startOver() {

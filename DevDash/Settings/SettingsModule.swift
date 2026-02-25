@@ -157,12 +157,13 @@ struct AboutDetailView: View {
                 VStack(alignment: .leading, spacing: 24) {
                     // App Icon and Name
                     HStack(spacing: 24) {
-                        Image(systemName: "app.dashed")
-                            .font(.system(size: 80))
-                            .foregroundColor(accentColor.current)
-                            .frame(width: 100, height: 100)
-                            .background(accentColor.current.opacity(0.1))
-                            .cornerRadius(16)
+                        Image(systemName: "square.grid.2x2.fill")
+                        .font(.title2)
+                        .foregroundStyle(.linearGradient(
+                            colors: [.blue, .purple],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        ))
 
                         VStack(alignment: .leading, spacing: 8) {
                             Text("DevDash")
