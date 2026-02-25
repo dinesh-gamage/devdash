@@ -8,6 +8,7 @@
 import Foundation
 import AppKit
 import UniformTypeIdentifiers
+import LocalAuthentication
 
 /// Errors that can occur during import
 enum ImportError: Error, LocalizedError {
@@ -62,10 +63,12 @@ class ImportExportManager {
     /// - Parameters:
     ///   - type: Type of items to import
     ///   - title: Dialog title
+    ///   - context: Optional LAContext for decrypting encrypted files without password prompts
     ///   - completion: Completion handler called on main thread with Result
     func importJSON<T: Codable>(
         _ type: T.Type,
         title: String = "Import",
+        context: LAContext? = nil,
         completion: @escaping (Result<[T], ImportError>) -> Void
     ) {
         let openPanel = NSOpenPanel()
@@ -103,9 +106,9 @@ class ImportExportManager {
 
             var jsonData: Data
             if isEncrypted {
-                // Decrypt the file
+                // Decrypt the file using authenticated context if available
                 do {
-                    jsonData = try FileEncryption.shared.decrypt(fileData)
+                    jsonData = try FileEncryption.shared.decrypt(fileData, context: context)
                 } catch {
                     DispatchQueue.main.async {
                         completion(.failure(.jsonDecodeFailed))  // Decryption failed

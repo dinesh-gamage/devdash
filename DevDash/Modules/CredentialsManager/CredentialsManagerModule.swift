@@ -109,6 +109,8 @@ class CredentialsManagerState: ObservableObject {
     @Published var credentialToEdit: Credential?
     @Published var credentialToDelete: Credential?
     @Published var showingDeleteConfirmation = false
+    @Published var showingDeleteAllConfirmation = false
+    @Published var deleteAllConfirmationText = ""
 
     // Search/Filter
     @Published var searchText = ""
@@ -156,6 +158,10 @@ struct CredentialsManagerSidebarView: View {
                 },
                 ToolbarButtonConfig(icon: "square.and.arrow.up", help: "Export Credentials") {
                     state.manager.exportCredentials()
+                },
+                ToolbarButtonConfig(icon: "trash", help: "Delete All Credentials") {
+                    state.deleteAllConfirmationText = ""
+                    state.showingDeleteAllConfirmation = true
                 }
             ],
             items: state.filteredCredentials,
@@ -258,6 +264,22 @@ struct CredentialsManagerSidebarView: View {
             if let credential = state.credentialToDelete {
                 Text("Are you sure you want to delete '\(credential.title)'? This action cannot be undone.")
             }
+        }
+        .alert("Delete All Credentials", isPresented: $state.showingDeleteAllConfirmation) {
+            TextField("Type 'confirm'", text: $state.deleteAllConfirmationText)
+            Button("Cancel", role: .cancel) {
+                state.deleteAllConfirmationText = ""
+            }
+            Button("Delete All", role: .destructive) {
+                let count = state.manager.credentials.count
+                state.selectedCredential = nil
+                state.manager.clearAll()
+                state.toastQueue.enqueue(message: "Deleted \(count) credential\(count == 1 ? "" : "s")")
+                state.deleteAllConfirmationText = ""
+            }
+            .disabled(state.deleteAllConfirmationText.lowercased() != "confirm")
+        } message: {
+            Text("This will permanently delete all \(state.manager.credentials.count) credential\(state.manager.credentials.count == 1 ? "" : "s") and remove them from the Keychain. Type 'confirm' to proceed.")
         }
         .onAppear {
             AppTheme.AccentColor.shared.set(.green)

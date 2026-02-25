@@ -489,22 +489,30 @@ class CredentialsManager: ObservableObject {
     }
 
     func importCredentials() {
-        ImportExportManager.shared.importJSON(ImportCredential.self, title: "Import Credentials") { result in
-            Task { @MainActor in
-                switch result {
-                case .success(let importedCredentials):
-                    self.isLoading = true
+        Task {
+            do {
+                // Require biometric auth before import
+                try await authManager.authenticate(reason: "Authenticate to import credentials")
 
-                    var newCount = 0
-                    var updatedCount = 0
+                // Now proceed with import using authenticated context
+                await MainActor.run {
+                    ImportExportManager.shared.importJSON(ImportCredential.self, title: "Import Credentials", context: self.authContext) { result in
+                        Task { @MainActor in
+                            switch result {
+                            case .success(let importedCredentials):
+                                self.isLoading = true
 
-                    for importItem in importedCredentials {
-                        do {
-                            // Check if credential with same title exists (trim whitespace)
-                            let trimmedTitle = importItem.title.trimmingCharacters(in: .whitespaces)
-                            if let index = self.credentials.firstIndex(where: {
-                                $0.title.trimmingCharacters(in: .whitespaces) == trimmedTitle
-                            }) {
+                                var newCount = 0
+                                var updatedCount = 0
+                                var failedImports: [(title: String, error: String)] = []
+
+                                for importItem in importedCredentials {
+                                    do {
+                                        // Check if credential with same title exists (trim whitespace)
+                                        let trimmedTitle = importItem.title.trimmingCharacters(in: .whitespaces)
+                                        if let index = self.credentials.firstIndex(where: {
+                                            $0.title.trimmingCharacters(in: .whitespaces) == trimmedTitle
+                                        }) {
                                 // Update existing credential
                                 let existingCredential = self.credentials[index]
 
@@ -630,39 +638,71 @@ class CredentialsManager: ObservableObject {
                                     notes: importItem.notes
                                 )
 
-                                self.credentials.append(credential)
-                                newCount += 1
+                                        self.credentials.append(credential)
+                                        newCount += 1
+                                    }
+                                } catch {
+                                    // Track error and continue with other credentials
+                                    failedImports.append((importItem.title, error.localizedDescription))
+                                    print("Failed to import credential '\(importItem.title)': \(error.localizedDescription)")
+                                }
                             }
-                        } catch {
-                            // Log error but continue with other credentials
-                            print("Failed to import credential '\(importItem.title)': \(error.localizedDescription)")
+
+                                self.saveCredentials()
+                                self.isLoading = false
+
+                                // Show success toast or error alert
+                                if newCount == 0 && updatedCount == 0 && !failedImports.isEmpty {
+                                    // All imports failed - show error alert with details
+                                    let errorList = failedImports.prefix(5).map { "• \($0.title): \($0.error)" }.joined(separator: "\n")
+                                    self.alertQueue?.enqueue(
+                                        title: "Import Failed",
+                                        message: "Failed to import \(failedImports.count) credential\(failedImports.count == 1 ? "" : "s"):\n\n\(errorList)\(failedImports.count > 5 ? "\n\n...and \(failedImports.count - 5) more" : "")"
+                                    )
+                                } else {
+                                    // Some or all succeeded
+                                    var message: String
+                                    if newCount > 0 && updatedCount > 0 {
+                                        message = "Imported \(newCount) new, updated \(updatedCount) existing"
+                                    } else if newCount > 0 {
+                                        message = "Imported \(newCount) new credential\(newCount == 1 ? "" : "s")"
+                                    } else if updatedCount > 0 {
+                                        message = "Updated \(updatedCount) credential\(updatedCount == 1 ? "" : "s")"
+                                    } else {
+                                        message = "No credentials imported"
+                                    }
+
+                                    if !failedImports.isEmpty {
+                                        message += " (\(failedImports.count) failed)"
+                                    }
+
+                                    self.toastQueue?.enqueue(message: message)
+
+                                    // Show error details if some failed
+                                    if !failedImports.isEmpty {
+                                        let errorList = failedImports.prefix(5).map { "• \($0.title): \($0.error)" }.joined(separator: "\n")
+                                        self.alertQueue?.enqueue(
+                                            title: "Some Imports Failed",
+                                            message: "\(failedImports.count) credential\(failedImports.count == 1 ? "" : "s") failed to import:\n\n\(errorList)\(failedImports.count > 5 ? "\n\n...and \(failedImports.count - 5) more" : "")"
+                                        )
+                                    }
+                                }
+
+                            case .failure(let error):
+                                self.isLoading = false
+
+                                // Only show error alerts, not cancellation
+                                if case .userCancelled = error {
+                                    return
+                                }
+                                self.alertQueue?.enqueue(title: "Import Failed", message: error.localizedDescription)
+                            }
                         }
                     }
-
-                    self.saveCredentials()
-                    self.isLoading = false
-
-                    // Show success toast
-                    let message: String
-                    if newCount > 0 && updatedCount > 0 {
-                        message = "Imported \(newCount) new, updated \(updatedCount) existing"
-                    } else if newCount > 0 {
-                        message = "Imported \(newCount) new credential\(newCount == 1 ? "" : "s")"
-                    } else if updatedCount > 0 {
-                        message = "Updated \(updatedCount) credential\(updatedCount == 1 ? "" : "s")"
-                    } else {
-                        message = "No credentials imported"
-                    }
-                    self.toastQueue?.enqueue(message: message)
-
-                case .failure(let error):
-                    self.isLoading = false
-
-                    // Only show error alerts, not cancellation
-                    if case .userCancelled = error {
-                        return
-                    }
-                    self.alertQueue?.enqueue(title: "Import Failed", message: error.localizedDescription)
+                }
+            } catch {
+                await MainActor.run {
+                    self.alertQueue?.enqueue(title: "Authentication Required", message: "You must authenticate to import credentials")
                 }
             }
         }

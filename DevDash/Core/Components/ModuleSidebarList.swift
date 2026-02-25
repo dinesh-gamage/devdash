@@ -206,9 +206,9 @@ struct ModuleSidebarList<Item: Identifiable, HeaderContent: View>: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Toolbar (only show if there are buttons)
-            if !toolbarButtons.isEmpty {
-                HStack(spacing: 12) {
+            HStack(spacing: 12) {
+                // Toolbar (only show if there are buttons) else show a blank space
+                if !toolbarButtons.isEmpty {
                     ForEach(toolbarButtons.indices, id: \.self) { index in
                         VariantButton(
                             icon: toolbarButtons[index].icon,
@@ -217,15 +217,15 @@ struct ModuleSidebarList<Item: Identifiable, HeaderContent: View>: View {
                             action: toolbarButtons[index].action
                         )
                     }
-                    Spacer()
                 }
-                .padding(.horizontal, 6)
-                .padding(.vertical, 6)
-                .background(AppTheme.toolbarBackground)
-
-                Divider()
+                Spacer()
             }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 6)
+            .background(AppTheme.toolbarBackground)
 
+            Divider()
+            
             // Custom header content (e.g., category filters)
             if let headerContent = headerContent {
                 headerContent()

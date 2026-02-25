@@ -91,29 +91,18 @@ struct CopyableField: View {
             // Hide without authentication
             isRevealed = false
         } else {
-            // Reveal with authentication
-            authenticateAndReveal()
-        }
-    }
-
-    private func authenticateAndReveal() {
-        let context = LAContext()
-        var error: NSError?
-
-        // Check if biometric authentication is available
-        if context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &error) {
-            let reason = "Authenticate to reveal this secret"
-
-            context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: reason) { success, error in
-                DispatchQueue.main.async {
-                    if success {
+            // Use session-based authentication from BiometricAuthManager
+            Task {
+                do {
+                    try await BiometricAuthManager.shared.verifyAuthentication(reason: "Authenticate to reveal this secret")
+                    await MainActor.run {
                         isRevealed = true
                     }
+                } catch {
+                    // Authentication failed or cancelled - don't reveal
+                    print("Failed to authenticate for reveal: \(error.localizedDescription)")
                 }
             }
-        } else {
-            // Fallback if authentication is not available
-            isRevealed = true
         }
     }
 

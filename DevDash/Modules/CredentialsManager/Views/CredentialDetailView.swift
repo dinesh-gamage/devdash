@@ -12,6 +12,12 @@ struct CredentialDetailView: View {
 
     @ObservedObject private var state = CredentialsManagerState.shared
 
+    // Cache secrets to avoid repeated Keychain access on every view render
+    @State private var cachedPassword: String?
+    @State private var cachedAccessToken: String?
+    @State private var cachedRecoveryCodes: String?
+    @State private var cachedFieldValues: [UUID: String] = [:]
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
@@ -79,7 +85,7 @@ struct CredentialDetailView: View {
                             .font(AppTheme.h3)
                             .foregroundColor(.secondary)
 
-                        if let password = state.manager.getPasswordSafe(for: credential) {
+                        if let password = cachedPassword {
                             CopyableField(password, isSecret: true, monospaced: true)
                                 .padding(12)
                                 .background(Color(NSColor.controlBackgroundColor))
@@ -95,7 +101,7 @@ struct CredentialDetailView: View {
                     }
 
                     // Access Token
-                    if let accessToken = state.manager.getAccessTokenSafe(for: credential) {
+                    if let accessToken = cachedAccessToken {
                         VStack(alignment: .leading, spacing: 8) {
                             Label("Access Token", systemImage: "key.horizontal.fill")
                                 .font(AppTheme.h3)
@@ -109,7 +115,7 @@ struct CredentialDetailView: View {
                     }
 
                     // Recovery Codes
-                    if let recoveryCodes = state.manager.getRecoveryCodesSafe(for: credential) {
+                    if let recoveryCodes = cachedRecoveryCodes {
                         VStack(alignment: .leading, spacing: 8) {
                             Label("Recovery Codes", systemImage: "shield.lefthalf.filled")
                                 .font(AppTheme.h3)
@@ -130,7 +136,7 @@ struct CredentialDetailView: View {
                                 .foregroundColor(.secondary)
 
                             ForEach(credential.additionalFields) { field in
-                                CredentialFieldRow(field: field)
+                                CredentialFieldRow(field: field, cachedValue: cachedFieldValues[field.id])
                             }
                         }
                     }
@@ -155,6 +161,27 @@ struct CredentialDetailView: View {
                 .padding(.horizontal)
             }
         }
+        .onAppear {
+            loadCredentialSecrets()
+        }
+        .onChange(of: credential.id) { _ in
+            loadCredentialSecrets()
+        }
+    }
+
+    private func loadCredentialSecrets() {
+        // Load all secrets once when view appears
+        cachedPassword = state.manager.getPasswordSafe(for: credential)
+        cachedAccessToken = state.manager.getAccessTokenSafe(for: credential)
+        cachedRecoveryCodes = state.manager.getRecoveryCodesSafe(for: credential)
+
+        // Load additional field values
+        cachedFieldValues.removeAll()
+        for field in credential.additionalFields {
+            if let value = state.manager.getFieldValueSafe(for: field) {
+                cachedFieldValues[field.id] = value
+            }
+        }
     }
 
     private func categoryIcon(_ category: String) -> String {
@@ -174,8 +201,7 @@ struct CredentialDetailView: View {
 
 struct CredentialFieldRow: View {
     let field: CredentialField
-
-    @ObservedObject private var state = CredentialsManagerState.shared
+    let cachedValue: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -183,7 +209,7 @@ struct CredentialFieldRow: View {
                 .font(AppTheme.h3)
                 .foregroundColor(.secondary)
 
-            if let value = state.manager.getFieldValueSafe(for: field) {
+            if let value = cachedValue {
                 CopyableField(value, isSecret: field.isSecret, monospaced: field.isSecret)
                     .padding(12)
                     .background(Color(NSColor.controlBackgroundColor))
