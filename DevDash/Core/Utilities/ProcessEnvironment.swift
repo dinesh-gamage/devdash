@@ -8,31 +8,31 @@
 import Foundation
 import SwiftUI
 
-/// Manages process environment variables, particularly resolving the user's actual shell PATH
-/// macOS GUI apps don't inherit the user's shell PATH from .zshrc/.zprofile
-/// This utility discovers and caches the user's PATH on first access
+/// Manages process environment variables, resolving the user's actual shell environment
+/// macOS GUI apps don't inherit the user's shell environment from .zshrc/.zprofile
+/// This utility discovers and caches the user's full shell environment on first access
 class ProcessEnvironment {
     static let shared = ProcessEnvironment()
 
-    private var cachedUserPath: String?
+    private var cachedUserEnvironment: [String: String]?
     private let lock = NSLock()
 
     private init() {}
 
-    /// Get the user's actual PATH from their login shell
+    /// Get the user's full environment from their login shell
     /// This is cached after first access for performance
-    private func getUserPath() -> String {
+    private func getUserEnvironment() -> [String: String] {
         lock.lock()
         defer { lock.unlock() }
 
-        if let cached = cachedUserPath {
+        if let cached = cachedUserEnvironment {
             return cached
         }
 
-        // Discover PATH by running a login shell
+        // Discover environment by running a login shell
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        process.arguments = ["-l", "-c", "echo $PATH"]
+        process.arguments = ["-l", "-c", "printenv"]
 
         let pipe = Pipe()
         process.standardOutput = pipe
@@ -47,10 +47,26 @@ class ProcessEnvironment {
             // Explicitly close pipe to release file handle immediately
             try? pipe.fileHandleForReading.close()
 
-            if let path = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
-               !path.isEmpty {
-                cachedUserPath = path
-                return path
+            if let output = String(data: data, encoding: .utf8) {
+                // Parse printenv output (KEY=value format, one per line)
+                var env: [String: String] = [:]
+                let lines = output.components(separatedBy: .newlines)
+
+                for line in lines {
+                    guard !line.isEmpty else { continue }
+
+                    // Split on first = only (value might contain =)
+                    if let separatorIndex = line.firstIndex(of: "=") {
+                        let key = String(line[..<separatorIndex])
+                        let value = String(line[line.index(after: separatorIndex)...])
+                        env[key] = value
+                    }
+                }
+
+                if !env.isEmpty {
+                    cachedUserEnvironment = env
+                    return env
+                }
             }
         } catch {
             // Ensure pipe is closed even on error
@@ -58,20 +74,19 @@ class ProcessEnvironment {
             // Fall back to ProcessInfo if discovery fails
         }
 
-        // Fallback: use ProcessInfo's PATH (will be limited to system defaults)
-        let fallbackPath = ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"
-        cachedUserPath = fallbackPath
-        return fallbackPath
+        // Fallback: use ProcessInfo environment (limited to system defaults)
+        let fallback = ProcessInfo.processInfo.environment
+        cachedUserEnvironment = fallback
+        return fallback
     }
 
-    /// Get environment dictionary with user's actual PATH and optional additional variables
+    /// Get environment dictionary with user's shell environment and optional additional variables
     /// - Parameter additionalVars: Optional dictionary of additional environment variables to merge
     /// - Returns: Environment dictionary suitable for Process.environment
     func getEnvironment(additionalVars: [String: String] = [:]) -> [String: String] {
-        var env = ProcessInfo.processInfo.environment
-        env["PATH"] = getUserPath()
+        var env = getUserEnvironment()
 
-        // Merge additional variables (these override any existing)
+        // Merge additional variables (these override shell environment)
         for (key, value) in additionalVars {
             env[key] = value
         }
