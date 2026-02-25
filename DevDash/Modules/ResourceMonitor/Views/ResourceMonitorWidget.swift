@@ -8,17 +8,19 @@
 import SwiftUI
 
 struct ResourceMonitorWidget: View {
+    let isDashboard: Bool
     let onModuleTap: (() -> Void)?
     @ObservedObject private var monitor = ResourceMonitorState.shared.monitor
 
-    init(onModuleTap: (() -> Void)? = nil) {
+    init(isDashboard: Bool = false, onModuleTap: (() -> Void)? = nil) {
+        self.isDashboard = isDashboard
         self.onModuleTap = onModuleTap
     }
 
     var body: some View {
         Group {
-            if let onModuleTap = onModuleTap {
-                // Dashboard widget with footer
+            if isDashboard, let onModuleTap = onModuleTap {
+                // Dashboard widget with DashboardCard wrapper
                 DashboardCard(
                     title: "System Resources",
                     moduleName: "Resource Monitor",
@@ -29,29 +31,8 @@ struct ResourceMonitorWidget: View {
                     widgetContent
                 }
             } else {
-                // Standalone widget without footer
-                VStack(alignment: .leading, spacing: 0) {
-                    // Header
-                    HStack {
-                        Text("System Resources")
-                            .font(.headline)
-                            .foregroundColor(.white)
-
-                        Spacer()
-
-                        Image(systemName: "gauge.with.dots.needle.67percent")
-                            .font(.title3)
-                            .foregroundColor(.white.opacity(0.8))
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 12)
-                    .background(Color.orange.opacity(0.1))
-
-                    widgetContent
-                }
-                .background(Color.orange.opacity(0.1))
-                .cornerRadius(12)
-                .shadow(color: AppTheme.shadowColor, radius: 4, y: 2)
+                // Standalone content without header/background
+                widgetContent
             }
         }
         .onAppear {

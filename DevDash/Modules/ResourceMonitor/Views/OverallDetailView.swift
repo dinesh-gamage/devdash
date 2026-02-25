@@ -41,10 +41,10 @@ struct OverallDetailView: View {
                     // Filter tabs
                     HStack(spacing: 8) {
                         ForEach(ProcessSortOption.allCases, id: \.self) { option in
-                            FilterTab(
-                                title: option.rawValue,
+                            VariantButton(
+                                option.rawValue,
                                 icon: option.icon,
-                                isSelected: selectedSort == option
+                                variant: selectedSort == option ? .primary : .secondary
                             ) {
                                 selectedSort = option
                             }
@@ -137,39 +137,6 @@ struct OverallDetailView: View {
     }
 }
 
-// MARK: - Filter Tab
-
-struct FilterTab: View {
-    let title: String
-    let icon: String
-    let isSelected: Bool
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 6) {
-                Image(systemName: icon)
-                    .font(.caption)
-                Text(title)
-                    .font(.caption)
-                    .fontWeight(.medium)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .background(
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(isSelected ? Color.orange.opacity(0.15) : Color.clear)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 6)
-                    .stroke(isSelected ? Color.orange : Color.secondary.opacity(0.3), lineWidth: 1)
-            )
-            .foregroundColor(isSelected ? .orange : .secondary)
-        }
-        .buttonStyle(.plain)
-    }
-}
-
 // MARK: - Process Row
 
 struct ProcessRow: View {
@@ -258,10 +225,10 @@ struct DevDashDetailView: View {
                     // Filter tabs
                     HStack(spacing: 8) {
                         ForEach(ProcessSortOption.allCases, id: \.self) { option in
-                            FilterTab(
-                                title: option.rawValue,
+                            VariantButton(
+                                option.rawValue,
                                 icon: option.icon,
-                                isSelected: selectedSort == option
+                                variant: selectedSort == option ? .primary : .secondary
                             ) {
                                 selectedSort = option
                             }
@@ -363,22 +330,6 @@ struct DevDashMetricsCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Header
-            HStack {
-                Text("DevDash Usage")
-                    .font(.headline)
-                    .foregroundColor(.white)
-
-                Spacer()
-
-                Image(systemName: "app.badge.fill")
-                    .font(.title3)
-                    .foregroundColor(.white.opacity(0.8))
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
-            .background(Color.orange.opacity(0.1))
-
             // Content
             if let metrics = metrics {
                 VStack(spacing: 12) {
