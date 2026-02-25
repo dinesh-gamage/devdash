@@ -162,16 +162,51 @@ struct ModuleSidebarListItem: View {
 
 // MARK: - Module Sidebar List
 
-struct ModuleSidebarList<Item: Identifiable>: View {
+struct ModuleSidebarList<Item: Identifiable, HeaderContent: View>: View {
     let toolbarButtons: [ToolbarButtonConfig]
     let items: [Item]
     let emptyState: EmptyStateConfig
     let selectedItem: Binding<Item?>
+    let searchEnabled: Bool
+    let searchPlaceholder: String
+    let searchFilter: ((Item, String) -> Bool)?
+    let headerContent: (() -> HeaderContent)?
     let itemContent: (Item, Bool) -> ModuleSidebarListItem
+
+    @State private var searchText = ""
+
+    init(
+        toolbarButtons: [ToolbarButtonConfig],
+        items: [Item],
+        emptyState: EmptyStateConfig,
+        selectedItem: Binding<Item?>,
+        searchEnabled: Bool = false,
+        searchPlaceholder: String = "Search...",
+        searchFilter: ((Item, String) -> Bool)? = nil,
+        @ViewBuilder headerContent: @escaping () -> HeaderContent,
+        itemContent: @escaping (Item, Bool) -> ModuleSidebarListItem
+    ) {
+        self.toolbarButtons = toolbarButtons
+        self.items = items
+        self.emptyState = emptyState
+        self.selectedItem = selectedItem
+        self.searchEnabled = searchEnabled
+        self.searchPlaceholder = searchPlaceholder
+        self.searchFilter = searchFilter
+        self.headerContent = headerContent
+        self.itemContent = itemContent
+    }
+
+    var filteredItems: [Item] {
+        if searchEnabled, !searchText.isEmpty, let filter = searchFilter {
+            return items.filter { filter($0, searchText) }
+        }
+        return items
+    }
 
     var body: some View {
         VStack(spacing: 0) {
-            // Toolbar
+            // Toolbar (only show if there are buttons)
             if !toolbarButtons.isEmpty {
                 HStack(spacing: 12) {
                     ForEach(toolbarButtons.indices, id: \.self) { index in
@@ -182,7 +217,6 @@ struct ModuleSidebarList<Item: Identifiable>: View {
                             action: toolbarButtons[index].action
                         )
                     }
-
                     Spacer()
                 }
                 .padding(.horizontal, 6)
@@ -192,24 +226,52 @@ struct ModuleSidebarList<Item: Identifiable>: View {
                 Divider()
             }
 
+            // Custom header content (e.g., category filters)
+            if let headerContent = headerContent {
+                headerContent()
+            }
+
+            // Search bar (optional)
+            if searchEnabled {
+                HStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundColor(.secondary)
+                    TextField(searchPlaceholder, text: $searchText)
+                        .textFieldStyle(.plain)
+
+                    if !searchText.isEmpty {
+                        Button(action: { searchText = "" }) {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundColor(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(8)
+                .background(Color(NSColor.controlBackgroundColor))
+
+                Divider()
+            }
+
             // Content
-            if items.isEmpty {
+            if filteredItems.isEmpty {
                 // Empty state
                 VStack(spacing: 12) {
                     Image(systemName: emptyState.icon)
                         .font(.system(size: 48))
                         .foregroundColor(.secondary)
 
-                    Text(emptyState.title)
+                    Text(searchEnabled && !searchText.isEmpty ? "No Results" : emptyState.title)
                         .font(.headline)
                         .foregroundColor(.secondary)
 
-                    Text(emptyState.subtitle)
+                    Text(searchEnabled && !searchText.isEmpty ? "Try a different search term" : emptyState.subtitle)
                         .font(.caption)
                         .foregroundColor(.secondary)
 
                     if let buttonText = emptyState.buttonText,
-                       let buttonAction = emptyState.buttonAction {
+                       let buttonAction = emptyState.buttonAction,
+                       searchText.isEmpty {
                         Button(action: buttonAction) {
                             if let buttonIcon = emptyState.buttonIcon {
                                 Label(buttonText, systemImage: buttonIcon)
@@ -224,7 +286,7 @@ struct ModuleSidebarList<Item: Identifiable>: View {
             } else {
                 // List
                 List {
-                    ForEach(items) { item in
+                    ForEach(filteredItems) { item in
                         itemContent(item, selectedItem.wrappedValue?.id as? Item.ID == item.id)
                     }
                 }
@@ -232,5 +294,30 @@ struct ModuleSidebarList<Item: Identifiable>: View {
                 .id(AppTheme.AccentColor.shared.current)
             }
         }
+    }
+}
+
+// MARK: - Convenience Init (No Header Content)
+
+extension ModuleSidebarList where HeaderContent == EmptyView {
+    init(
+        toolbarButtons: [ToolbarButtonConfig],
+        items: [Item],
+        emptyState: EmptyStateConfig,
+        selectedItem: Binding<Item?>,
+        searchEnabled: Bool = false,
+        searchPlaceholder: String = "Search...",
+        searchFilter: ((Item, String) -> Bool)? = nil,
+        itemContent: @escaping (Item, Bool) -> ModuleSidebarListItem
+    ) {
+        self.toolbarButtons = toolbarButtons
+        self.items = items
+        self.emptyState = emptyState
+        self.selectedItem = selectedItem
+        self.searchEnabled = searchEnabled
+        self.searchPlaceholder = searchPlaceholder
+        self.searchFilter = searchFilter
+        self.headerContent = nil
+        self.itemContent = itemContent
     }
 }

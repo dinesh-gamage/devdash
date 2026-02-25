@@ -61,34 +61,34 @@ struct SettingsSidebarView: View {
     ]
 
     var body: some View {
-        VStack(spacing: 0) {
-            // Toolbar (empty for now)
-            HStack(spacing: 12) {
-                Spacer()
-            }
-            .padding(.horizontal, 6)
-            .padding(.vertical, 6)
-            .background(AppTheme.toolbarBackground)
-
-            Divider()
-
-            // Settings Categories List
-            List {
-                ForEach(categories) { category in
-                    ModuleSidebarListItem(
-                        icon: .image(systemName: category.icon, color: accentColor.current),
-                        title: category.name,
-                        subtitle: nil,
-                        badge: nil,
-                        actions: [],
-                        isSelected: state.selectedCategory == category.id,
-                        onTap: {
-                            state.selectedCategory = category.id
-                        }
-                    )
+        ModuleSidebarList(
+            toolbarButtons: [],  // No toolbar buttons for settings
+            items: categories,
+            emptyState: EmptyStateConfig(
+                icon: "gearshape",
+                title: "No Settings",
+                subtitle: "No settings available"
+            ),
+            selectedItem: Binding(
+                get: {
+                    categories.first(where: { $0.id == state.selectedCategory })
+                },
+                set: { newValue in
+                    state.selectedCategory = newValue?.id
                 }
-            }
-            .listStyle(.plain)
+            )
+        ) { category, isSelected in
+            ModuleSidebarListItem(
+                icon: .image(systemName: category.icon, color: accentColor.current),
+                title: category.name,
+                subtitle: nil,
+                badge: nil,
+                actions: [],
+                isSelected: isSelected,
+                onTap: {
+                    state.selectedCategory = category.id
+                }
+            )
         }
         .onAppear {
             AppTheme.AccentColor.shared.set(.blue)

@@ -146,111 +146,83 @@ struct CredentialsManagerSidebarView: View {
     @ObservedObject var state = CredentialsManagerState.shared
 
     var body: some View {
-        VStack(spacing: 0) {
-            // Toolbar
-            HStack(spacing: 12) {
-                VariantButton(icon: "plus.circle", variant: .primary, tooltip: "Add Credential") {
+        ModuleSidebarList(
+            toolbarButtons: [
+                ToolbarButtonConfig(icon: "plus.circle", help: "Add Credential") {
                     state.showingAddCredential = true
-                }
-                VariantButton(icon: "square.and.arrow.down", variant: .primary, tooltip: "Import Credentials") {
+                },
+                ToolbarButtonConfig(icon: "square.and.arrow.down", help: "Import Credentials") {
                     state.manager.importCredentials()
-                }
-                VariantButton(icon: "square.and.arrow.up", variant: .primary, tooltip: "Export Credentials") {
+                },
+                ToolbarButtonConfig(icon: "square.and.arrow.up", help: "Export Credentials") {
                     state.manager.exportCredentials()
                 }
-                Spacer()
-            }
-            .padding(.horizontal, 6)
-            .padding(.vertical, 6)
-            .background(AppTheme.toolbarBackground)
-
-            Divider()
-
-            // Category filter
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    CategoryFilterButton(title: "All", isSelected: state.selectedCategory == nil) {
-                        state.selectedCategory = nil
-                    }
-
-                    ForEach(CredentialCategory.all, id: \.self) { category in
-                        CategoryFilterButton(title: category, isSelected: state.selectedCategory == category) {
-                            state.selectedCategory = category
-                        }
-                    }
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-            }
-            .background(Color(NSColor.controlBackgroundColor))
-
-            Divider()
-
-            // Search bar
-            HStack(spacing: 8) {
-                Image(systemName: "magnifyingglass")
-                    .foregroundColor(.secondary)
-                TextField("Search credentials...", text: $state.searchText)
-                    .textFieldStyle(.plain)
-
-                if !state.searchText.isEmpty {
-                    Button(action: { state.searchText = "" }) {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundColor(.secondary)
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            .padding(8)
-            .background(Color(NSColor.controlBackgroundColor))
-
-            Divider()
-
-            // List or empty state
-            if state.filteredCredentials.isEmpty {
-                VStack(spacing: 12) {
-                    Image(systemName: "key")
-                        .font(.system(size: 48))
-                        .foregroundColor(.secondary)
-
-                    Text(state.searchText.isEmpty && state.selectedCategory == nil ? "No Credentials" : "No Results")
-                        .font(.headline)
-                        .foregroundColor(.secondary)
-
-                    if state.searchText.isEmpty && state.selectedCategory == nil {
-                        Text("Add a credential to get started")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-
-                        Button(action: { state.showingAddCredential = true }) {
-                            Label("Add Credential", systemImage: "plus")
-                        }
-                        .buttonStyle(.borderedProminent)
-                    }
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                List {
-                    ForEach(state.filteredCredentials) { credential in
-                        CredentialListItem(
-                            credential: credential,
-                            isSelected: state.selectedCredential?.id == credential.id,
-                            onTap: {
-                                state.selectedCredential = credential
-                            },
-                            onDelete: {
-                                state.credentialToDelete = credential
-                                state.showingDeleteConfirmation = true
-                            },
-                            onEdit: {
-                                state.credentialToEdit = credential
-                                state.showingEditCredential = true
+            ],
+            items: state.filteredCredentials,
+            emptyState: EmptyStateConfig(
+                icon: "key",
+                title: "No Credentials",
+                subtitle: "Add a credential to get started",
+                buttonText: "Add Credential",
+                buttonIcon: "plus",
+                buttonAction: { state.showingAddCredential = true }
+            ),
+            selectedItem: $state.selectedCredential,
+            searchEnabled: true,
+            searchPlaceholder: "Search credentials...",
+            searchFilter: { credential, searchText in
+                credential.title.localizedCaseInsensitiveContains(searchText) ||
+                credential.username?.localizedCaseInsensitiveContains(searchText) == true ||
+                credential.category.localizedCaseInsensitiveContains(searchText)
+            },
+            headerContent: {
+                // Category filter
+                VStack(spacing: 0) {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            CategoryFilterButton(title: "All", isSelected: state.selectedCategory == nil) {
+                                state.selectedCategory = nil
                             }
-                        )
+
+                            ForEach(CredentialCategory.all, id: \.self) { category in
+                                CategoryFilterButton(title: category, isSelected: state.selectedCategory == category) {
+                                    state.selectedCategory = category
+                                }
+                            }
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
                     }
+                    .background(Color(NSColor.controlBackgroundColor))
+
+                    Divider()
                 }
-                .listStyle(.plain)
             }
+        ) { credential, isSelected in
+            let subtitle = [credential.category, credential.username]
+                .compactMap { $0 }
+                .joined(separator: " • ")
+
+            return ModuleSidebarListItem(
+                icon: .image(systemName: categoryIcon(credential.category), color: .accentColor),
+                title: credential.title,
+                subtitle: subtitle.isEmpty ? nil : subtitle,
+                badge: nil,
+                actions: [
+                    ListItemAction(icon: "pencil", variant: .primary, tooltip: "Edit") {
+                        state.credentialToEdit = credential
+                        state.showingEditCredential = true
+                    },
+                    ListItemAction(icon: "trash", variant: .danger, tooltip: "Delete") {
+                        state.credentialToDelete = credential
+                        state.showingDeleteConfirmation = true
+                    }
+                ],
+                isSelected: isSelected,
+                onTap: {
+                    state.selectedCredential = credential
+                }
+            )
         }
         .sheet(isPresented: $state.showingAddCredential) {
             AddCredentialView(manager: state.manager)
@@ -289,6 +261,18 @@ struct CredentialsManagerSidebarView: View {
         }
         .onAppear {
             AppTheme.AccentColor.shared.set(.green)
+        }
+    }
+
+    private func categoryIcon(_ category: String) -> String {
+        switch category {
+        case CredentialCategory.databases: return "cylinder.fill"
+        case CredentialCategory.apiKeys: return "network"
+        case CredentialCategory.ssh: return "terminal.fill"
+        case CredentialCategory.websites: return "globe"
+        case CredentialCategory.servers: return "server.rack"
+        case CredentialCategory.applications: return "app.fill"
+        default: return "key.fill"
         }
     }
 }
@@ -339,46 +323,5 @@ struct CategoryFilterButton: View {
                 .cornerRadius(12)
         }
         .buttonStyle(.plain)
-    }
-}
-
-// MARK: - Credential List Item
-
-struct CredentialListItem: View {
-    let credential: Credential
-    let isSelected: Bool
-    let onTap: () -> Void
-    let onDelete: () -> Void
-    let onEdit: () -> Void
-
-    var body: some View {
-        let subtitle = [credential.category, credential.username]
-            .compactMap { $0 }
-            .joined(separator: " • ")
-
-        return ModuleSidebarListItem(
-            icon: .image(systemName: categoryIcon(credential.category), color: .accentColor),
-            title: credential.title,
-            subtitle: subtitle.isEmpty ? nil : subtitle,
-            badge: nil,
-            actions: [
-                ListItemAction(icon: "pencil", variant: .primary, tooltip: "Edit", action: onEdit),
-                ListItemAction(icon: "trash", variant: .danger, tooltip: "Delete", action: onDelete)
-            ],
-            isSelected: isSelected,
-            onTap: onTap
-        )
-    }
-
-    private func categoryIcon(_ category: String) -> String {
-        switch category {
-        case CredentialCategory.databases: return "cylinder.fill"
-        case CredentialCategory.apiKeys: return "network"
-        case CredentialCategory.ssh: return "terminal.fill"
-        case CredentialCategory.websites: return "globe"
-        case CredentialCategory.servers: return "server.rack"
-        case CredentialCategory.applications: return "app.fill"
-        default: return "key.fill"
-        }
     }
 }

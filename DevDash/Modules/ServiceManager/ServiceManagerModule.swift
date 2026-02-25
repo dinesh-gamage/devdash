@@ -75,83 +75,107 @@ struct ServiceManagerSidebarView: View {
     @ObservedObject var state = ServiceManagerState.shared
 
     var body: some View {
-        VStack(spacing: 0) {
-            // Toolbar
-            HStack(spacing: 12) {
-                VariantButton(icon: "plus.circle", variant: .primary, tooltip: "Add Service") {
+        ModuleSidebarList(
+            toolbarButtons: [
+                ToolbarButtonConfig(icon: "plus.circle", help: "Add Service") {
                     state.showingAddService = true
-                }
-                VariantButton(icon: "square.and.arrow.down", variant: .primary, tooltip: "Import Services") {
+                },
+                ToolbarButtonConfig(icon: "square.and.arrow.down", help: "Import Services") {
                     state.manager.importServices()
-                }
-                VariantButton(icon: "square.and.arrow.up", variant: .primary, tooltip: "Export Services") {
+                },
+                ToolbarButtonConfig(icon: "square.and.arrow.up", help: "Export Services") {
                     state.manager.exportServices()
-                }
-                VariantButton(icon: "curlybraces", variant: .primary, tooltip: "Edit JSON") {
+                },
+                ToolbarButtonConfig(icon: "curlybraces", help: "Edit JSON") {
                     state.showingJSONEditor = true
-                }
-                VariantButton(icon: "arrow.clockwise", variant: .primary, tooltip: "Refresh All") {
+                },
+                ToolbarButtonConfig(icon: "arrow.clockwise", help: "Refresh All") {
                     state.manager.checkAllServices()
                 }
-                Spacer()
-            }
-            .padding(.horizontal, 6)
-            .padding(.vertical, 6)
-            .background(AppTheme.toolbarBackground)
-
-            Divider()
-
-            // List or empty state
-            if state.manager.servicesList.isEmpty {
-                VStack(spacing: 12) {
-                    Image(systemName: "gearshape.2")
-                        .font(.system(size: 48))
-                        .foregroundColor(.secondary)
-
-                    Text("No Services")
-                        .font(.headline)
-                        .foregroundColor(.secondary)
-
-                    Text("Add a service to get started")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-
-                    Button(action: { state.showingAddService = true }) {
-                        Label("Add Service", systemImage: "plus")
+            ],
+            items: state.manager.servicesList,
+            emptyState: EmptyStateConfig(
+                icon: "gearshape.2",
+                title: "No Services",
+                subtitle: "Add a service to get started",
+                buttonText: "Add Service",
+                buttonIcon: "plus",
+                buttonAction: { state.showingAddService = true }
+            ),
+            selectedItem: Binding(
+                get: {
+                    if let selected = state.selectedService {
+                        return state.manager.servicesList.first(where: { $0.id == selected.id })
                     }
-                    .buttonStyle(.borderedProminent)
+                    return nil
+                },
+                set: { newValue in
+                    if let serviceInfo = newValue {
+                        state.selectedService = state.manager.getRuntime(id: serviceInfo.id)
+                    } else {
+                        state.selectedService = nil
+                    }
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            ),
+            searchEnabled: true,
+            searchPlaceholder: "Search services...",
+            searchFilter: { serviceInfo, searchText in
+                serviceInfo.name.localizedCaseInsensitiveContains(searchText) ||
+                serviceInfo.command.localizedCaseInsensitiveContains(searchText) ||
+                serviceInfo.workingDirectory.localizedCaseInsensitiveContains(searchText)
+            }
+        ) { serviceInfo, isSelected in
+            // Build actions array based on service state
+            var actions: [ListItemAction] = []
+
+            if serviceInfo.isRunning {
+                actions.append(
+                    ListItemAction(icon: "stop.fill", variant: .danger, tooltip: "Stop") {
+                        state.manager.getRuntime(id: serviceInfo.id)?.stop()
+                    }
+                )
+                actions.append(
+                    ListItemAction(icon: "arrow.clockwise", variant: .primary, tooltip: "Restart") {
+                        state.manager.getRuntime(id: serviceInfo.id)?.restart()
+                    }
+                )
             } else {
-                List {
-                    ForEach(state.manager.servicesList) { serviceInfo in
-                        ServiceListItem(
-                            serviceInfo: serviceInfo,
-                            isSelected: state.selectedService?.id == serviceInfo.id,
-                            manager: state.manager,
-                            onDelete: {
-                                // Get full runtime for deletion
-                                if let runtime = state.manager.getRuntime(id: serviceInfo.id) {
-                                    state.serviceToDelete = runtime
-                                    state.showingDeleteConfirmation = true
-                                }
-                            },
-                            onEdit: {
-                                // Get full runtime for editing
-                                if let runtime = state.manager.getRuntime(id: serviceInfo.id) {
-                                    state.serviceToEdit = runtime
-                                    state.showingEditService = true
-                                }
-                            }
-                        )
-                        .onTapGesture {
-                            // Get full runtime when selected
-                            state.selectedService = state.manager.getRuntime(id: serviceInfo.id)
-                        }
+                actions.append(
+                    ListItemAction(icon: "play.fill", variant: .primary, tooltip: "Start") {
+                        state.manager.getRuntime(id: serviceInfo.id)?.start()
+                    }
+                )
+            }
+
+            // Add divider and edit/delete
+            actions.append(
+                ListItemAction(icon: "pencil", variant: .primary, tooltip: "Edit") {
+                    if let runtime = state.manager.getRuntime(id: serviceInfo.id) {
+                        state.serviceToEdit = runtime
+                        state.showingEditService = true
                     }
                 }
-                .listStyle(.plain)
-            }
+            )
+            actions.append(
+                ListItemAction(icon: "trash", variant: .danger, tooltip: "Delete") {
+                    if let runtime = state.manager.getRuntime(id: serviceInfo.id) {
+                        state.serviceToDelete = runtime
+                        state.showingDeleteConfirmation = true
+                    }
+                }
+            )
+
+            return ModuleSidebarListItem(
+                icon: .status(color: serviceInfo.isRunning ? AppTheme.statusRunning : AppTheme.statusStopped),
+                title: serviceInfo.name,
+                subtitle: nil,
+                badge: nil,
+                actions: actions,
+                isSelected: isSelected,
+                onTap: {
+                    state.selectedService = state.manager.getRuntime(id: serviceInfo.id)
+                }
+            )
         }
         .sheet(isPresented: $state.showingAddService) {
             AddServiceView(manager: state.manager)
