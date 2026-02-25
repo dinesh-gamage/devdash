@@ -11,39 +11,14 @@ struct ScanProgressView: View {
     let message: String
     let currentPath: String?
     let locationInfos: [LocationScanInfo]
-    let onStop: () -> Void
 
     var body: some View {
-        VStack(spacing: 0) {
-            // Header with Stop button
-            HStack {
-                Text("Scanning...")
-                    .font(AppTheme.h2)
-                    .foregroundColor(.primary)
-
-                Spacer()
-
-                VariantButton(
-                    "Stop Scan",
-                    icon: "stop.circle",
-                    variant: .danger
-                ) {
-                    onStop()
-                }
-            }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 16)
-            .background(Color.secondary.opacity(0.05))
-
-            Divider()
-
-            // Compact location list
-            ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(locationInfos) { locationInfo in
-                        LocationScanRow(locationInfo: locationInfo)
-                        Divider()
-                    }
+        // Compact location list
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(locationInfos) { locationInfo in
+                    LocationScanRow(locationInfo: locationInfo)
+                    Divider()
                 }
             }
         }

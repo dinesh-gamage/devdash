@@ -300,7 +300,10 @@ struct DashboardView: View {
 
                         // Resource Monitor Widget
                         ResourceMonitorWidget(
-                            onModuleTap: { onSelectModule("resource-monitor") }
+                            onModuleTap: {
+                                ResourceMonitorState.shared.selectedView = .overall
+                                onSelectModule("resource-monitor")
+                            }
                         )
                         .frame(height: 350)
                     }

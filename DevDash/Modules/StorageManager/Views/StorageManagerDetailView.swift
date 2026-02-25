@@ -128,12 +128,20 @@ struct ScanningStateView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Header
+            // Header with Stop button
             HStack {
                 Text("Storage Manager")
                     .font(AppTheme.h2)
 
                 Spacer()
+
+                VariantButton(
+                    "Stop Scan",
+                    icon: "stop.circle",
+                    variant: .danger
+                ) {
+                    state.stopScan()
+                }
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 16)
@@ -146,10 +154,7 @@ struct ScanningStateView: View {
                 ScanProgressView(
                     message: message,
                     currentPath: path,
-                    locationInfos: state.manager.locationScanInfos,
-                    onStop: {
-                        state.stopScan()
-                    }
+                    locationInfos: state.manager.locationScanInfos
                 )
             }
         }
