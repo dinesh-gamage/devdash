@@ -15,11 +15,11 @@ class SystemMetricsMonitor: ObservableObject {
     @Published var currentMetrics: SystemMetrics?
 
     private var updateTimer: Timer?
-    private let updateInterval: TimeInterval = 3.0  // 3 seconds (reduced frequency)
+    private let updateInterval: TimeInterval = 1.0  // 1 second
     private var previousCPUInfo: host_cpu_load_info?
 
     // Minimum change threshold to trigger UI update (reduce unnecessary publishes)
-    private let changeThreshold: Double = 2.0  // 2% minimum change (increased threshold)
+    private let changeThreshold: Double = 2.0  // 2% minimum change
 
     init() {
         // Don't start monitoring automatically - wait for view to appear
@@ -115,13 +115,14 @@ class SystemMetricsMonitor: ObservableObject {
         let pageSize = vm_kernel_page_size
         let totalGB = Double(physicalMemory) / 1_073_741_824.0  // Convert to GB
 
-        // Calculate used memory
+        // Calculate used memory (App Memory in Activity Monitor)
+        // Formula: Active + Wired + Compressed
+        // Inactive pages are cached/reclaimable and excluded from "used"
         let activePages = UInt64(stats.active_count)
-        let inactivePages = UInt64(stats.inactive_count)
         let wiredPages = UInt64(stats.wire_count)
-        let compressedPages = UInt64(stats.compressor_page_count)
+        let compressorPages = UInt64(stats.compressor_page_count)  // Physical memory occupied by compressor
 
-        let usedPages = activePages + inactivePages + wiredPages + compressedPages
+        let usedPages = activePages + wiredPages + compressorPages
         let usedBytes = usedPages * UInt64(pageSize)
         let usedGB = Double(usedBytes) / 1_073_741_824.0
 
