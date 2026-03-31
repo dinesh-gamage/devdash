@@ -21,8 +21,45 @@ class SystemMetricsMonitor: ObservableObject {
     // Minimum change threshold to trigger UI update (reduce unnecessary publishes)
     private let changeThreshold: Double = 2.0  // 2% minimum change
 
+    // Per-process CPU tracking cache
+    private var processCPUCache: [pid_t: (timestamp: TimeInterval, cpuTime: UInt64)] = [:]
+
+    // Cached DevDash aggregated metrics
+    private var cachedDevDashMetrics: (metrics: (totalCPU: Double, totalMemoryMB: Double, processCount: Int), timestamp: TimeInterval)?
+    private let devDashMetricsCacheDuration: TimeInterval = 1.0  // Cache for 1 second
+
     init() {
-        // Don't start monitoring automatically - wait for view to appear
+        // Pre-warm CPU cache for accurate first measurement
+        // This prevents all widgets from showing 0% on first load
+        prewarmCPUCache()
+    }
+
+    /// Pre-populate CPU cache with baseline measurements for common processes
+    private func prewarmCPUCache() {
+        // First pass: Establish baseline
+        let devdashPID = ProcessInfo.processInfo.processIdentifier
+        _ = getProcessCPU(pid: devdashPID)
+
+        let maxProcs = 1024
+        var pids = [pid_t](repeating: 0, count: maxProcs)
+        let procCount = proc_listallpids(&pids, Int32(maxProcs * MemoryLayout<pid_t>.size))
+
+        for i in 0..<min(50, Int(procCount)) {
+            let pid = pids[i]
+            guard pid > 0 else { continue }
+            _ = getProcessCPU(pid: pid)
+        }
+
+        // Second pass after small delay: Get actual CPU readings
+        // This ensures first widget fetch has real data
+        Thread.sleep(forTimeInterval: 0.1)  // 100ms delay
+
+        _ = getProcessCPU(pid: devdashPID)
+        for i in 0..<min(50, Int(procCount)) {
+            let pid = pids[i]
+            guard pid > 0 else { continue }
+            _ = getProcessCPU(pid: pid)
+        }
     }
 
     nonisolated deinit {
@@ -317,17 +354,13 @@ class SystemMetricsMonitor: ObservableObject {
 
         switch sortBy {
         case .memory:
-            // Only fetch memory info
             memoryMB = getProcessMemory(pid: pid)
         case .cpu:
-            // Only fetch CPU info (placeholder for now)
             cpuPercent = getProcessCPU(pid: pid)
         case .network:
-            // Only fetch network info (placeholder)
-            networkMBps = 0.0
+            networkMBps = 0.0  // TODO: Implement network tracking
         case .disk:
-            // Only fetch disk info (placeholder)
-            diskMBps = 0.0
+            diskMBps = 0.0      // TODO: Implement disk I/O tracking
         }
 
         return SystemProcess(
@@ -341,25 +374,48 @@ class SystemMetricsMonitor: ObservableObject {
     }
 
     private func getProcessMemory(pid: pid_t) -> Double {
-        var taskInfo = mach_task_basic_info()
-        var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size) / 4
-        let kr = withUnsafeMutablePointer(to: &taskInfo) {
-            $0.withMemoryRebound(to: integer_t.self, capacity: 1) {
-                task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), $0, &count)
-            }
-        }
+        var taskInfo = proc_taskinfo()
+        let size = proc_pidinfo(pid, PROC_PIDTASKINFO, 0, &taskInfo, Int32(MemoryLayout<proc_taskinfo>.size))
 
-        if kr == KERN_SUCCESS {
-            return Double(taskInfo.resident_size) / 1_048_576.0  // Convert to MB
-        }
-        return 0.0
+        guard size > 0 else { return 0.0 }
+
+        // Return resident memory in MB
+        return Double(taskInfo.pti_resident_size) / 1_048_576.0
     }
 
     private func getProcessCPU(pid: pid_t) -> Double {
-        // CPU usage calculation requires delta tracking per process
-        // For now, return 0 as placeholder
-        // TODO: Implement per-process CPU tracking with rusage or task_info
-        return 0.0
+        var taskInfo = proc_taskinfo()
+        let size = proc_pidinfo(pid, PROC_PIDTASKINFO, 0, &taskInfo, Int32(MemoryLayout<proc_taskinfo>.size))
+
+        guard size > 0 else { return 0.0 }
+
+        // Total CPU time in nanoseconds (user + system)
+        let currentCPUTime = taskInfo.pti_total_user + taskInfo.pti_total_system
+        let currentTimestamp = Date().timeIntervalSince1970
+
+        // Check if we have previous measurement for this process
+        if let cached = processCPUCache[pid] {
+            // Calculate delta
+            let timeDelta = currentTimestamp - cached.timestamp
+            let cpuDelta = currentCPUTime - cached.cpuTime
+
+            // Update cache
+            processCPUCache[pid] = (timestamp: currentTimestamp, cpuTime: currentCPUTime)
+
+            guard timeDelta > 0 else { return 0.0 }
+
+            // Convert CPU delta from nanoseconds to seconds
+            let cpuDeltaSeconds = Double(cpuDelta) / 1_000_000_000.0
+
+            // CPU percentage = (CPU time used / wall time elapsed) * 100
+            let cpuPercent = (cpuDeltaSeconds / timeDelta) * 100.0
+
+            return min(cpuPercent, 100.0)
+        } else {
+            // First measurement - store and return 0
+            processCPUCache[pid] = (timestamp: currentTimestamp, cpuTime: currentCPUTime)
+            return 0.0
+        }
     }
 
     // MARK: - DevDash-Specific Monitoring
@@ -400,6 +456,15 @@ class SystemMetricsMonitor: ObservableObject {
     }
 
     func getDevDashAggregatedMetrics() -> (totalCPU: Double, totalMemoryMB: Double, processCount: Int) {
+        let currentTime = Date().timeIntervalSince1970
+
+        // Return cached result if still valid
+        if let cached = cachedDevDashMetrics,
+           currentTime - cached.timestamp < devDashMetricsCacheDuration {
+            return cached.metrics
+        }
+
+        // Calculate fresh metrics
         let devdashPID = ProcessInfo.processInfo.processIdentifier
         var totalCPU: Double = 0.0
         var totalMemory: Double = 0.0
@@ -430,7 +495,12 @@ class SystemMetricsMonitor: ObservableObject {
             }
         }
 
-        return (totalCPU: totalCPU, totalMemoryMB: totalMemory, processCount: count)
+        let result = (totalCPU: totalCPU, totalMemoryMB: totalMemory, processCount: count)
+
+        // Cache the result
+        cachedDevDashMetrics = (metrics: result, timestamp: currentTime)
+
+        return result
     }
 }
 
