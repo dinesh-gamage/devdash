@@ -9,6 +9,10 @@ import SwiftUI
 
 struct ServiceDetailView: View {
     @ObservedObject var service: ServiceRuntime
+    @State private var input = ""
+
+    /// Script services start in the background on purpose, so "outside DevDash" doesn't apply
+    private var showsExternal: Bool { service.isExternallyManaged && service.config.script == nil }
 
     var body: some View {
         ServiceOutputPanel(
@@ -18,7 +22,7 @@ struct ServiceDetailView: View {
             actionButtons: {
                 HStack {
                     if service.isRunning {
-                        if service.isExternallyManaged {
+                        if showsExternal {
                             Badge("Running outside DevDash", icon: "exclamationmark.triangle", variant: .warning)
                         }
 
@@ -32,7 +36,7 @@ struct ServiceDetailView: View {
                         }
                         .disabled(service.processingAction != nil)
 
-                        if service.isExternallyManaged {
+                        if showsExternal {
                             VariantButton("Kill & Start", variant: .danger, isLoading: service.processingAction == .killingAndRestarting) {
                                 service.killAndRestart()
                             }
@@ -50,6 +54,16 @@ struct ServiceDetailView: View {
                             service.start()
                         }
                         .disabled(service.processingAction != nil)
+                    }
+
+                    if service.acceptsInput {
+                        TextField("Send input", text: $input)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 160)
+                            .onSubmit {
+                                service.sendInput(input)
+                                input = ""
+                            }
                     }
 
                     VariantButton(icon: "arrow.clockwise", variant: .secondary, tooltip: "Check service status") {
@@ -70,6 +84,12 @@ struct ServiceDetailView: View {
                 }
             }
         )
+        .sheet(isPresented: Binding(
+            get: { service.pendingPrompt != nil },
+            set: { if !$0 { service.pendingPrompt = nil } }
+        )) {
+            ServiceInputPrompt(service: service)
+        }
         .task {
             await service.checkStatus()
         }
@@ -122,5 +142,46 @@ struct ServiceDetailView: View {
         }
 
         return rows
+    }
+}
+
+/// Popup for a service that is waiting for input
+struct ServiceInputPrompt: View {
+    @Environment(\.dismiss) var dismiss
+    let service: ServiceRuntime
+    @State private var answer = ""
+
+    private var prompt: String { service.pendingPrompt ?? "" }
+    private var isSecret: Bool {
+        let p = prompt.lowercased()
+        return ["password", "passphrase", "pin", "secret", "token"].contains { p.contains($0) }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("\(service.config.name) is asking for input").font(.headline)
+            Text(prompt).font(.system(.body, design: .monospaced)).textSelection(.enabled)
+            Group {
+                if isSecret {
+                    SecureField("Answer", text: $answer)
+                } else {
+                    TextField("Answer", text: $answer)
+                }
+            }
+            .textFieldStyle(.roundedBorder)
+            .onSubmit(send)
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("Send", action: send).keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(20)
+        .frame(width: 420)
+    }
+
+    private func send() {
+        service.sendInput(answer)
+        dismiss()
     }
 }

@@ -23,6 +23,10 @@ class TunnelRuntime: ObservableObject, Identifiable {
     private var process: Process?
     private var pipe: Pipe?
 
+    // Tunnel left running by an earlier DevDash session
+    private(set) var externalPID: pid_t?
+    private var exitWatch: DispatchSourceProcess?
+
     // Log batching
     private var logBuffer = ""
     private var flushTimer: DispatchSourceTimer?
@@ -41,6 +45,7 @@ class TunnelRuntime: ObservableObject, Identifiable {
         flushTimer = nil
         pipe?.fileHandleForReading.readabilityHandler = nil
         process?.terminate()
+        exitWatch?.cancel()
     }
 
     // MARK: - Tunnel Control
@@ -143,8 +148,42 @@ class TunnelRuntime: ObservableObject, Identifiable {
         }
     }
 
+    /// Track an ssh tunnel that is already running (started before DevDash restarted).
+    /// The kernel reports its exit, so there is no polling.
+    func adopt(pid: pid_t) {
+        guard !isConnected else { return }
+        externalPID = pid
+        isConnected = true
+        connectionError = nil
+        appendLog("[Status] Found tunnel already running (pid \(pid)). Logs from before are not available.")
+
+        let watch = DispatchSource.makeProcessSource(identifier: pid, eventMask: .exit, queue: .main)
+        watch.setEventHandler { [weak self] in
+            MainActor.assumeIsolated { self?.adoptedTunnelExited() }
+        }
+        watch.resume()
+        exitWatch = watch
+        // It may have exited before the watch started
+        if kill(pid, 0) != 0 { adoptedTunnelExited() }
+    }
+
+    private func adoptedTunnelExited() {
+        guard externalPID != nil else { return }
+        exitWatch?.cancel()
+        exitWatch = nil
+        externalPID = nil
+        isConnected = false
+        appendLog("[Status] Tunnel stopped")
+    }
+
     func stop() {
         guard isConnected else { return }
+
+        if let pid = externalPID {
+            appendLog("[Status] Stopping tunnel (pid \(pid))...")
+            kill(pid, SIGTERM)    // The exit watch flips the state
+            return
+        }
 
         appendLog("[Status] Stopping tunnel...")
         isConnected = false

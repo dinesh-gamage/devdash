@@ -88,12 +88,17 @@ Key components in `Modules/ServiceManager/`:
 - **ServiceManagerDetailView**: Detail pane showing selected service or empty state
 
 **Models/ServiceModels.swift**:
-- **ServiceConfig**: Codable config model (name, command, workingDir, port, env vars)
+- **ServiceConfig**: Codable config model (name, command, workingDir, port, env vars, check/stop/restart commands, logFile)
+  - Two types: plain command, or `script` (`ScriptConfig`: a script taking start/stop/status args). Script services store their built command/stop/check, so the runtime treats both the same.
+  - **ServiceDraft**: form state shared by Add and Edit. Tracking: process, port, or check command (exit 0 = running).
 
 **Runtime/ServiceRuntime.swift**:
 - **ServiceRuntime**: ObservableObject managing process lifecycle, log streaming, error/warning parsing
 - Runs services as `/bin/zsh` processes with Pipe-based stdout/stderr streaming
 - Ring buffer for logs with proactive trimming at maxLogLines
+- `logFile` is followed with `tail -F` while the service runs (scripts that log to a file)
+- Input: output that ends without a newline and goes quiet shows a prompt sheet. The answer goes to stdin.
+- Passwords: every service process gets `Askpass.environment` (`Core/Utilities/Askpass.swift`). A `sudo` wrapper first on PATH adds `-A`, and `SUDO_ASKPASS`/`SSH_ASKPASS` show a macOS dialog. DevDash never sees the password.
 - Real-time log parsing for errors/warnings with stack trace detection
 
 **Managers/ServiceManager.swift**:
@@ -124,6 +129,7 @@ Key components in `Modules/EC2Manager/`:
 - Credentials come from `ProcessEnvironment.getEnvironment(withAWSProfile:region:)` (aws-vault session via `AWSVaultServerManager`)
 - Runs `aws ec2 describe-instances` / stop / start / wait / describe-instance-status asynchronously (Task.detached)
 - Opens SSH terminals (`TerminalLauncher`) and runs tunnels (`Runtime/TunnelRuntime.swift`)
+- Tunnels outlive an app restart. `adoptRunningTunnels()` finds the `ssh -L <port>:` listener on each local port and tracks its pid (exit watched with a DispatchSource).
 - Stores groups in UserDefaults with key "instanceGroups" (no default groups)
 
 **Views/**:
@@ -554,7 +560,7 @@ Before committing any state management changes:
 - **AWSVaultServerManager**: Cached aws-vault credential sessions per profile
 - **ToastQueue**: Sequential toast messages (one per module state, attached in `ContentView`)
 - **BackupManager / FileEncryption**: Encrypted S3 backup and restore
-- **TerminalLauncher**: Opens commands (e.g. SSH) in Terminal
+- **TerminalLauncher**: Opens commands (e.g. SSH) in a new iTerm2 tab, or a Terminal window when iTerm2 isn't installed
 
 **Theme System** (`Core/Theme/AppTheme.swift`):
 - Centralized typography (h1, h2, h3, body, caption)

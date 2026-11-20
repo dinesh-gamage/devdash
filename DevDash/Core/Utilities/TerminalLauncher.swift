@@ -27,7 +27,7 @@ enum TerminalLauncherError: LocalizedError {
     var recoverySuggestion: String? {
         switch self {
         case .permissionDenied:
-            return "Go to System Settings > Privacy & Security > Automation, and enable Terminal for DevDash. The SSH command has been copied to your clipboard."
+            return "Go to System Settings > Privacy & Security > Automation, and enable iTerm (or Terminal) for DevDash. The SSH command has been copied to your clipboard."
         default:
             return nil
         }
@@ -59,7 +59,7 @@ class TerminalLauncher {
         try open(command: command)
     }
 
-    /// Opens Terminal and runs a shell command in a new window.
+    /// Opens a shell command in a new iTerm2 tab, or a new Terminal window when iTerm2 isn't installed.
     /// On a permission error the command is copied to the clipboard.
     static func open(command: String) throws {
         // Escape command for AppleScript (escape quotes and backslashes)
@@ -67,7 +67,19 @@ class TerminalLauncher {
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
 
-        let script = """
+        let iTermInstalled = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.googlecode.iterm2") != nil
+        let script = iTermInstalled ? """
+        tell application "iTerm"
+            activate
+            if (count of windows) = 0 then
+                set w to (create window with default profile)
+            else
+                set w to current window
+                tell w to create tab with default profile
+            end if
+            tell current session of w to write text "\(escapedCommand)"
+        end tell
+        """ : """
         tell application "Terminal"
             activate
             do script "\(escapedCommand)"

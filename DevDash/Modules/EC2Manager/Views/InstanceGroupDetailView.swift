@@ -274,6 +274,10 @@ struct InstanceGroupDetailView: View {
                     }
                 }
             }
+            .task {
+                // Pick up tunnels left running by an earlier DevDash session
+                await manager.adoptRunningTunnels()
+            }
             .sheet(isPresented: $state.showingAddInstance) {
             if let selectedGroup = state.selectedGroupForInstance {
                 AddInstanceView(manager: manager, group: selectedGroup)

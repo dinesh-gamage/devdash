@@ -15,16 +15,22 @@ class ServiceRuntime: ObservableObject, Identifiable, Hashable, OutputViewDataSo
     let config: ServiceConfig
 
     @Published var logs: String = ""
-    @Published var isRunning: Bool = false
+    @Published var isRunning: Bool = false {
+        didSet { if isRunning != oldValue { updateLogTail() } }
+    }
     @Published var isExternallyManaged: Bool = false
     @Published var hasPortConflict: Bool = false
     @Published var conflictingPID: Int? = nil
     @Published var errors: [LogEntry] = []
     @Published var warnings: [LogEntry] = []
     @Published var processingAction: ServiceAction? = nil
+    @Published var pendingPrompt: String?     // Output that looks like a question waiting for input
 
     private var process: Process?
     private var pipe: Pipe?
+    private var inputPipe: Pipe?              // stdin of the started process
+    private var promptTask: Task<Void, Never>?
+    private var tailProcess: Process?         // `tail -F` of config.logFile while running
 
     // Ring buffer for logs: fixed-size array of lines
     private var logLines: [String] = []
@@ -62,6 +68,14 @@ class ServiceRuntime: ObservableObject, Identifiable, Hashable, OutputViewDataSo
         flushTimer = nil
         pipe?.fileHandleForReading.readabilityHandler = nil
         process?.terminate()
+        promptTask?.cancel()
+        (tailProcess?.standardOutput as? Pipe)?.fileHandleForReading.readabilityHandler = nil
+        tailProcess?.terminate()
+    }
+
+    /// Service environment plus the password popup helpers
+    nonisolated static func environment(_ config: ServiceConfig) -> [String: String] {
+        Askpass.environment(ProcessEnvironment.shared.getEnvironment(additionalVars: config.environment), service: config.name)
     }
 
     // Hashable conformance
@@ -150,6 +164,7 @@ class ServiceRuntime: ObservableObject, Identifiable, Hashable, OutputViewDataSo
     // MARK: - Log flush (called on main queue by timer)
 
     private func startFlushTimer() {
+        guard flushTimer == nil else { return }
         let timer = DispatchSource.makeTimerSource(queue: .main)
         // Flush every 250ms instead of 100ms to reduce UI update frequency
         // This significantly reduces CPU usage while keeping logs responsive
@@ -162,6 +177,8 @@ class ServiceRuntime: ObservableObject, Identifiable, Hashable, OutputViewDataSo
     }
 
     private func stopFlushTimer() {
+        // The log tail still needs the timer
+        guard tailProcess == nil else { flushLogBuffer(); return }
         flushTimer?.cancel()
         flushTimer = nil
         // Flush any remaining buffered data
@@ -265,7 +282,7 @@ class ServiceRuntime: ObservableObject, Identifiable, Hashable, OutputViewDataSo
                         task.executableURL = URL(fileURLWithPath: "/bin/zsh")
                         task.arguments = ["-c", prereq.command]
                         task.currentDirectoryURL = URL(fileURLWithPath: config.workingDirectory)
-                        task.environment = ProcessEnvironment.shared.getEnvironment(additionalVars: config.environment)
+                        task.environment = Self.environment(config)
                         let pipe = Pipe()
                         task.standardOutput = pipe
                         task.standardError = pipe
@@ -349,14 +366,17 @@ class ServiceRuntime: ObservableObject, Identifiable, Hashable, OutputViewDataSo
             process.executableURL = URL(fileURLWithPath: "/bin/zsh")
             process.arguments = ["-c", config.command]
             process.currentDirectoryURL = URL(fileURLWithPath: config.workingDirectory)
-            process.environment = ProcessEnvironment.shared.getEnvironment(additionalVars: config.environment)
+            process.environment = Self.environment(config)
 
             process.standardOutput = pipe
             process.standardError = pipe
+            let input = Pipe()
+            process.standardInput = input
 
             await MainActor.run {
                 self.process = process
                 self.pipe = pipe
+                self.inputPipe = input
             }
 
             // Live log streaming using readabilityHandler
@@ -378,6 +398,7 @@ class ServiceRuntime: ObservableObject, Identifiable, Hashable, OutputViewDataSo
 
                 Task { @MainActor [weak self] in
                     self?.logBuffer += output
+                    self?.watchForPrompt(output)
                 }
             }
 
@@ -393,6 +414,9 @@ class ServiceRuntime: ObservableObject, Identifiable, Hashable, OutputViewDataSo
                     self.pipe?.fileHandleForReading.readabilityHandler = nil
                     try? self.pipe?.fileHandleForReading.close()
                     self.pipe = nil
+                    self.inputPipe = nil
+                    self.promptTask?.cancel()
+                    self.pendingPrompt = nil
 
                     self.stopFlushTimer()
                     self.logBuffer += "\n[Process terminated with code \(proc.terminationStatus)]\n"
@@ -403,10 +427,12 @@ class ServiceRuntime: ObservableObject, Identifiable, Hashable, OutputViewDataSo
                     }
                     // If a check command or port is configured, re-check true state
                     // (handles fire-and-forget launchers like `open -a Docker`)
+                    // The process is gone either way. A check may still find the service running
+                    // (scripts that start it in the background).
+                    self.process = nil
                     if self.config.checkCommand != nil || self.config.port != nil {
                         Task { await self.checkStatus() }
                     } else {
-                        self.process = nil
                         self.isRunning = false
                     }
                     // Only clear processingAction if this is an unexpected termination
@@ -484,16 +510,16 @@ class ServiceRuntime: ObservableObject, Identifiable, Hashable, OutputViewDataSo
         let ownedProcess = self.process
 
         if let checkCmd = config.checkCommand, !checkCmd.isEmpty {
-            Task.detached {
+            await Task.detached {
                 let task = Process()
                 task.executableURL = URL(fileURLWithPath: "/bin/zsh")
                 task.arguments = ["-c", checkCmd]
                 task.currentDirectoryURL = URL(fileURLWithPath: config.workingDirectory)
-                task.environment = ProcessEnvironment.shared.getEnvironment(additionalVars: config.environment)
+                task.environment = Self.environment(config)
                 do {
                     try task.run()
                     task.waitUntilExit()
-                    let running = task.terminationStatus == 1
+                    let running = task.terminationStatus == 0
                     await MainActor.run {
                         if running && ownedProcess == nil {
                             self.isExternallyManaged = true
@@ -513,9 +539,9 @@ class ServiceRuntime: ObservableObject, Identifiable, Hashable, OutputViewDataSo
                         self.logs += "[Check] Failed to run check command: \(error.localizedDescription)\n"
                     }
                 }
-            }
+            }.value
         } else if let port = config.port {
-            Task.detached {
+            await Task.detached {
                 let task = Process()
                 task.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
                 task.arguments = ["-i", ":\(port)", "-t"]
@@ -554,9 +580,11 @@ class ServiceRuntime: ObservableObject, Identifiable, Hashable, OutputViewDataSo
                         self.logs += "[Check] Failed to check port \(port): \(error.localizedDescription)\n"
                     }
                 }
-            }
+            }.value
         } else {
-            logs += "[Check] No check command or port configured\n"
+            // Track by process: running while the process DevDash started is alive
+            isExternallyManaged = false
+            isRunning = ownedProcess?.isRunning ?? false
         }
     }
 
@@ -759,7 +787,7 @@ class ServiceRuntime: ObservableObject, Identifiable, Hashable, OutputViewDataSo
             task.executableURL = URL(fileURLWithPath: "/bin/zsh")
             task.arguments = ["-c", command]
             task.currentDirectoryURL = URL(fileURLWithPath: config.workingDirectory)
-            task.environment = ProcessEnvironment.shared.getEnvironment(additionalVars: config.environment)
+            task.environment = Self.environment(config)
             let pipe = Pipe()
             task.standardOutput = pipe
             task.standardError = pipe
@@ -798,6 +826,63 @@ class ServiceRuntime: ObservableObject, Identifiable, Hashable, OutputViewDataSo
         // Clear processing action after verification
         await MainActor.run {
             self.processingAction = nil
+        }
+    }
+
+    // MARK: - Input Prompts
+
+    /// Output that ends without a newline and then goes quiet is likely a prompt waiting for input.
+    // ponytail: heuristic. Progress text without a newline can trigger it too. Cancel just hides the sheet.
+    private func watchForPrompt(_ chunk: String) {
+        promptTask?.cancel()
+        let last = chunk.components(separatedBy: .newlines).last?.trimmingCharacters(in: .whitespaces) ?? ""
+        guard !last.isEmpty else { return }
+        promptTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(400))
+            guard !Task.isCancelled, let self, self.process?.isRunning == true else { return }
+            self.pendingPrompt = last
+        }
+    }
+
+    /// Whether DevDash can send input (it started the process and it is still alive)
+    var acceptsInput: Bool { inputPipe != nil && process?.isRunning == true }
+
+    /// Send a line to the process stdin
+    func sendInput(_ text: String) {
+        pendingPrompt = nil
+        guard acceptsInput, let handle = inputPipe?.fileHandleForWriting else { return }
+        try? handle.write(contentsOf: Data((text + "\n").utf8))
+    }
+
+    // MARK: - Log File Tail
+
+    /// Follow config.logFile while the service runs. `tail -F` waits for new lines, so no polling.
+    private func updateLogTail() {
+        if isRunning, tailProcess == nil, let file = config.logFile, !file.isEmpty {
+            let tail = Process()
+            let out = Pipe()
+            tail.executableURL = URL(fileURLWithPath: "/usr/bin/tail")
+            tail.arguments = ["-n", "200", "-F", (file as NSString).expandingTildeInPath]
+            tail.standardOutput = out
+            tail.standardError = out
+            out.fileHandleForReading.readabilityHandler = { [weak self] handle in
+                let data = handle.availableData
+                guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
+                Task { @MainActor [weak self] in self?.logBuffer += text }
+            }
+            do {
+                try tail.run()
+                tailProcess = tail
+                startFlushTimer()
+            } catch {
+                out.fileHandleForReading.readabilityHandler = nil
+                logs += "[Log] Can't follow \(file): \(error.localizedDescription)\n"
+            }
+        } else if !isRunning, let tail = tailProcess {
+            (tail.standardOutput as? Pipe)?.fileHandleForReading.readabilityHandler = nil
+            tail.terminate()
+            tailProcess = nil
+            stopFlushTimer()
         }
     }
 

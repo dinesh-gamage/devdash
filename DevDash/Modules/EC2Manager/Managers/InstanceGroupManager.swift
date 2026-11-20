@@ -36,6 +36,7 @@ class InstanceGroupManager: ObservableObject {
         self.alertQueue = alertQueue
         self.toastQueue = toastQueue
         loadGroups()
+        Task { await adoptRunningTunnels() }
     }
 
     func loadGroups() {
@@ -623,31 +624,64 @@ class InstanceGroupManager: ObservableObject {
             return
         }
 
-        // Check if port is already in use
-        if isPortInUse(tunnel.localPort) {
-            alertQueue?.enqueue(title: "Port Conflict", message: "Port \(tunnel.localPort) is already in use by another process.")
-            return
-        }
-
         // Check if tunnel is already running
         if let existingRuntime = tunnelRuntimes[tunnel.id], existingRuntime.isConnected {
             toastQueue?.enqueue(message: "Tunnel '\(tunnel.name)' is already running")
             return
         }
 
-        // Create and start tunnel runtime
+        Task {
+            // Port taken: adopt our own ssh tunnel, refuse anything else
+            if let holder = await Self.portListener(tunnel.localPort) {
+                if Self.isTunnel(holder.command, port: tunnel.localPort) {
+                    runtime(for: tunnel, bastionIP: bastionIP, sshConfig: sshConfig).adopt(pid: holder.pid)
+                    toastQueue?.enqueue(message: "Tunnel '\(tunnel.name)' was already running. DevDash tracks it now.")
+                } else {
+                    alertQueue?.enqueue(title: "Port Conflict", message: "Port \(tunnel.localPort) is in use by pid \(holder.pid): \(holder.command)")
+                }
+                return
+            }
+            runtime(for: tunnel, bastionIP: bastionIP, sshConfig: sshConfig).start()
+            toastQueue?.enqueue(message: "Tunnel '\(tunnel.name)' started")
+        }
+    }
+
+    /// Fresh runtime for a tunnel, subscribed for UI updates
+    private func runtime(for tunnel: SSHTunnel, bastionIP: String, sshConfig: SSHConfig) -> TunnelRuntime {
         let runtime = TunnelRuntime(tunnel: tunnel, bastionIP: bastionIP, sshConfig: sshConfig)
         tunnelRuntimes[tunnel.id] = runtime
-
-        // Subscribe to runtime changes to trigger UI updates
-        let cancellable = runtime.objectWillChange.sink { [weak self] _ in
+        tunnelCancellables[tunnel.id] = runtime.objectWillChange.sink { [weak self] _ in
             self?.objectWillChange.send()
         }
-        tunnelCancellables[tunnel.id] = cancellable
+        return runtime
+    }
 
-        runtime.start()
+    /// Find ssh tunnels still running from an earlier DevDash session and track them,
+    /// so they show as connected and can be stopped.
+    func adoptRunningTunnels() async {
+        for group in groups {
+            for tunnel in group.tunnels where tunnelRuntimes[tunnel.id]?.isConnected != true {
+                guard let holder = await Self.portListener(tunnel.localPort),
+                      Self.isTunnel(holder.command, port: tunnel.localPort) else { continue }
+                let bastion = group.instances.first { $0.id == tunnel.bastionInstanceId }
+                let ssh = bastion.flatMap { resolveSSHConfig(instance: $0, group: group) } ?? SSHConfig()
+                runtime(for: tunnel, bastionIP: bastion?.lastKnownIP ?? "", sshConfig: ssh).adopt(pid: holder.pid)
+            }
+        }
+    }
 
-        toastQueue?.enqueue(message: "Tunnel '\(tunnel.name)' started")
+    /// Process listening on a local TCP port, with its command line
+    nonisolated static func portListener(_ port: Int) async -> (pid: pid_t, command: String)? {
+        let env = ProcessEnvironment.shared.getEnvironment()
+        let lsof = await ShellCommand.run("lsof", ["-nP", "-iTCP:\(port)", "-sTCP:LISTEN", "-t"], env: env)
+        guard let pid = lsof.stdout.split(whereSeparator: \.isNewline).first.flatMap({ pid_t($0) }) else { return nil }
+        let ps = await ShellCommand.run("ps", ["-o", "command=", "-p", "\(pid)"], env: env)
+        return (pid, ps.stdout.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    /// True for the ssh command DevDash builds for this tunnel (`ssh -L <port>:...`)
+    nonisolated static func isTunnel(_ command: String, port: Int) -> Bool {
+        command.contains("ssh") && command.contains("-L \(port):")
     }
 
     /// Stop an SSH tunnel
@@ -667,30 +701,6 @@ class InstanceGroupManager: ObservableObject {
                     runtime.stop()
                 }
             }
-        }
-    }
-
-    /// Check if a local port is in use
-    private func isPortInUse(_ port: Int) -> Bool {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
-        process.arguments = ["-i", ":\(port)"]
-
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = pipe
-
-        do {
-            try process.run()
-            process.waitUntilExit()
-
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            let output = String(data: data, encoding: .utf8) ?? ""
-
-            // lsof returns non-empty output if port is in use
-            return !output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && process.terminationStatus == 0
-        } catch {
-            return false
         }
     }
 
