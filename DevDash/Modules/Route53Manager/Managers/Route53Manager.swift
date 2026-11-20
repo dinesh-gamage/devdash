@@ -283,6 +283,76 @@ class Route53Manager: ObservableObject {
         saveLog()
     }
 
+    // MARK: - Import / Export
+
+    /// Export zones and records. Cached Route 53 values and history are left out.
+    func exportZones() {
+        let clean = zones.map { zone -> HostedZone in
+            var z = zone
+            z.records = zone.records.map { DNSRecord(id: $0.id, name: $0.name, link: $0.link) }
+            return z
+        }
+        ImportExportManager.shared.exportJSON(clean, defaultFileName: "route53-zones.json", title: "Export Route 53 Zones") { [weak self] result in
+            switch result {
+            case .success: self?.toastQueue?.enqueue(message: "Route 53 zones exported")
+            case .failure(let error):
+                if case .userCancelled = error { return }
+                self?.alertQueue?.enqueue(title: "Export Failed", message: error.localizedDescription)
+            }
+        }
+    }
+
+    /// Import zones. Matches zones by zone ID and records by name. Adds and updates, never deletes.
+    func importZones() {
+        ImportExportManager.shared.importJSON(HostedZone.self, title: "Import Route 53 Zones") { [weak self] result in
+            Task { @MainActor in
+                guard let self else { return }
+                switch result {
+                case .success(let imported):
+                    let (added, updated) = self.merge(imported)
+                    self.saveZones()
+                    self.toastQueue?.enqueue(message: "Imported \(added) new, updated \(updated)")
+                case .failure(let error):
+                    if case .userCancelled = error { return }
+                    self.alertQueue?.enqueue(title: "Import Failed", message: error.localizedDescription)
+                }
+            }
+        }
+    }
+
+    /// Merge imported zones into `zones`. Returns counts of new and updated zones + records.
+    private func merge(_ imported: [HostedZone]) -> (added: Int, updated: Int) {
+        var added = 0, updated = 0
+        for zone in imported {
+            let zoneId = DNSName.normalizeZoneId(zone.zoneId)
+            guard let z = zones.firstIndex(where: { $0.zoneId == zoneId }) else {
+                var new = HostedZone(name: DNSName.normalize(zone.name), zoneId: zoneId, awsProfile: zone.awsProfile)
+                new.records = zone.records.map { DNSRecord(name: DNSName.normalize($0.name), link: $0.link) }
+                zones.append(new)
+                added += 1 + new.records.count
+                continue
+            }
+            if zones[z].awsProfile != zone.awsProfile || zones[z].name != DNSName.normalize(zone.name) {
+                zones[z].awsProfile = zone.awsProfile
+                zones[z].name = DNSName.normalize(zone.name)
+                updated += 1
+            }
+            for record in zone.records {
+                let name = DNSName.normalize(record.name)
+                if let r = zones[z].records.firstIndex(where: { DNSName.normalize($0.name) == name }) {
+                    if zones[z].records[r].link != record.link {
+                        zones[z].records[r].link = record.link
+                        updated += 1
+                    }
+                } else {
+                    zones[z].records.append(DNSRecord(name: name, link: record.link))
+                    added += 1
+                }
+            }
+        }
+        return (added, updated)
+    }
+
     // MARK: - Backup
 
     func exportBackupData() throws -> Data {

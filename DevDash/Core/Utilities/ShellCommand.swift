@@ -32,10 +32,11 @@ enum ShellCommand {
 
             do {
                 try process.run()
-                // Read before waiting so a full stdout buffer can't deadlock the process.
-                // ponytail: stderr is read after stdout. A tool writing >64KB to stderr first would block. Read both concurrently if that ever matters.
+                // Read both pipes before waiting, concurrently, so a full buffer on either can't deadlock.
+                // (limactl/colima write long progress logs to stderr.)
+                let errRead = Task.detached { errPipe.fileHandleForReading.readDataToEndOfFile() }
                 let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
-                let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
+                let errData = await errRead.value
                 process.waitUntilExit()
                 return Result(
                     stdout: String(decoding: outData, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines),
@@ -46,6 +47,11 @@ enum ShellCommand {
                 return Result(stdout: "", stderr: "Process error: \(error.localizedDescription)", exitCode: -1)
             }
         }.value
+    }
+
+    /// Single-quote a value for a shell command string (e.g. one opened in Terminal).
+    nonisolated static func quote(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
     /// Readable "[Command] / [Exit Code] / [STDOUT] / [STDERR]" log, matching the EC2 output panel format.

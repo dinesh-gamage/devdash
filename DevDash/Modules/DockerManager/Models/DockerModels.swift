@@ -7,6 +7,63 @@
 
 import Foundation
 
+// MARK: - Container Engine
+
+/// Which CLI runs a container: Docker (on Colima) or Apple's `container`.
+enum ContainerEngine: String, Codable, CaseIterable, Identifiable {
+    // Order sets the sidebar and picker order
+    case apple
+    case docker
+
+    var id: String { rawValue }
+
+    /// CLI tool name
+    var cli: String {
+        switch self {
+        case .docker: return "docker"
+        case .apple: return "container"
+        }
+    }
+
+    /// Name of the engine host shown in the sidebar
+    var hostName: String {
+        switch self {
+        case .docker: return "Colima"
+        case .apple: return "Apple Containers"
+        }
+    }
+
+    var hostDescription: String {
+        switch self {
+        case .docker: return "Docker runtime engine for macOS"
+        case .apple: return "Apple's native container runtime (container CLI)"
+        }
+    }
+
+    /// Command line to start / stop / check the engine host
+    var statusArgs: (tool: String, args: [String]) {
+        switch self {
+        // One JSON line per profile. Says whether an instance exists and its specs.
+        case .docker: return ("colima", ["list", "--json"])
+        case .apple: return ("container", ["system", "status"])
+        }
+    }
+
+    var startArgs: (tool: String, args: [String]) {
+        switch self {
+        case .docker: return ("colima", ["start"])
+        case .apple: return ("container", ["system", "start"])
+        }
+    }
+
+    var stopArgs: (tool: String, args: [String]) {
+        switch self {
+        case .docker: return ("colima", ["stop"])
+        case .apple: return ("container", ["system", "stop"])
+        }
+    }
+}
+
 // MARK: - Port Mapping
 
 struct PortMapping: Codable, Identifiable, Equatable {
@@ -77,6 +134,9 @@ struct ContainerConfig: Codable, Identifiable {
     var memoryLimit: String? // e.g., "512m"
     var additionalParams: [AdditionalParam]
     var maxLogLines: Int?
+    var engine: ContainerEngine?   // nil = docker (configs saved before engines existed)
+
+    var resolvedEngine: ContainerEngine { engine ?? .docker }
 
     init(
         id: UUID = UUID(),
@@ -91,7 +151,8 @@ struct ContainerConfig: Codable, Identifiable {
         cpuLimit: String? = nil,
         memoryLimit: String? = nil,
         additionalParams: [AdditionalParam] = [],
-        maxLogLines: Int? = 1000
+        maxLogLines: Int? = 1000,
+        engine: ContainerEngine = .docker
     ) {
         self.id = id
         self.name = name
@@ -106,6 +167,7 @@ struct ContainerConfig: Codable, Identifiable {
         self.memoryLimit = memoryLimit
         self.additionalParams = additionalParams
         self.maxLogLines = maxLogLines
+        self.engine = engine
     }
 }
 
@@ -125,6 +187,7 @@ struct ContainerInfo: Identifiable, Equatable, Hashable {
     let id: UUID
     let name: String
     let image: String
+    let engine: ContainerEngine
     let status: ContainerStatus
     let dockerId: String? // Docker's actual container ID
     let ports: [PortMapping]
@@ -149,6 +212,7 @@ struct ContainerInfo: Identifiable, Equatable, Hashable {
 
 struct ImageInfo: Identifiable, Equatable, Hashable {
     let id: String // Repository:tag
+    let engine: ContainerEngine
     let repository: String
     let tag: String
     let imageId: String // Docker image ID
@@ -156,9 +220,33 @@ struct ImageInfo: Identifiable, Equatable, Hashable {
     let createdAt: Date?
 }
 
-// MARK: - Colima Info (Lightweight ViewModel)
+// MARK: - Engine Info (Lightweight ViewModel)
 
-struct ColimaInfo {
+struct EngineInfo {
     let isRunning: Bool
     let processingAction: ServiceAction?
+    var isSetUp: Bool = true      // false = Colima has no instance yet
+}
+
+/// The default Colima instance, from `colima list --json`
+// ponytail: default profile only. Add a profile picker if you run several.
+struct ColimaInstance: Decodable, Equatable {
+    let name: String
+    let status: String
+    let cpus: Int?
+    let memory: Double?
+    let disk: Double?
+    let runtime: String?
+
+    var isRunning: Bool { status.lowercased() == "running" }
+    // ponytail: unit not checked against a live instance. Bytes when large, else GiB.
+    var memoryGiB: Int? { memory.map(Self.gib) }
+    var diskGiB: Int? { disk.map(Self.gib) }
+    private static func gib(_ v: Double) -> Int { Int((v > 4096 ? v / 1_073_741_824 : v).rounded()) }
+
+    static func parse(_ output: String) -> ColimaInstance? {
+        output.split(whereSeparator: \.isNewline)
+            .compactMap { try? JSONDecoder().decode(ColimaInstance.self, from: Data($0.utf8)) }
+            .first { $0.name == "default" }
+    }
 }

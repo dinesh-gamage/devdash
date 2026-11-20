@@ -9,25 +9,33 @@ import SwiftUI
 
 struct ContainersListDetailView: View {
     @ObservedObject var state = DockerManagerState.shared
+    let engine: ContainerEngine
 
     @State private var containerOutputToView: ContainerInfo? = nil
     @State private var showingOutput = false
+
+    private var containers: [ContainerInfo] { state.manager.containers(for: engine) }
+    private var discovered: [ContainerConfig] { state.manager.discovered[engine] ?? [] }
+    private var isScanning: Bool { state.manager.scanning.contains(engine) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             // Header
             ModuleDetailHeader(
-                title: "Containers",
+                title: "\(engine.hostName) Containers",
                 actionButtons: {
                     HStack(spacing: 8) {
                         VariantButton("Add Container", icon: "plus", variant: .primary) {
                             state.showingAddContainer = true
                         }
 
+                        VariantButton("Scan", icon: "magnifyingglass", variant: .secondary, isLoading: isScanning) {
+                            Task { await state.manager.scan(engine) }
+                        }
+                        .disabled(isScanning || !state.isRunning(engine))
+
                         VariantButton(icon: "arrow.clockwise", variant: .secondary, tooltip: "Refresh") {
-                            Task {
-                                await state.manager.refreshContainersList()
-                            }
+                            Task { await refresh() }
                         }
                     }
                 }
@@ -35,8 +43,9 @@ struct ContainersListDetailView: View {
 
             Divider()
 
-            // Conditional: Show output panel OR container table
-            if showingOutput,
+            if !state.isRunning(engine) {
+                EngineStoppedView(host: state.engineRuntime(engine))
+            } else if showingOutput,
                let containerInfo = containerOutputToView,
                let runtime = state.manager.getRuntime(id: containerInfo.id) {
                 // Output panel with custom title
@@ -54,7 +63,71 @@ struct ContainersListDetailView: View {
                     }
                     .buttonStyle(.plain)
                 }
-            } else if state.manager.containersList.isEmpty {
+            } else {
+                if !discovered.isEmpty {
+                    discoveredSection
+                }
+                if containers.isEmpty {
+                    emptyState
+                } else {
+                    containersTable
+                }
+            }
+        }
+        .task {
+            await refresh()
+        }
+        .onChange(of: state.isRunning(engine)) { _, running in
+            if running { Task { await refresh() } }
+        }
+    }
+
+    private func refresh() async {
+        await state.manager.refreshContainersList()
+        await state.manager.scan(engine)
+    }
+
+    // MARK: - Found outside DevDash
+
+    private var discoveredSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Label("Found outside DevDash (\(discovered.count))", systemImage: "sparkle.magnifyingglass")
+                    .font(.headline)
+                Spacer()
+                if discovered.count > 1 {
+                    VariantButton("Add All", icon: "plus", variant: .primary) {
+                        state.manager.adopt(discovered)
+                    }
+                }
+            }
+            ForEach(discovered) { config in
+                HStack(spacing: 12) {
+                    Text(config.name).font(.body.monospaced())
+                    Text(config.image).font(.caption).foregroundColor(.secondary).lineLimit(1)
+                    if !config.ports.isEmpty {
+                        Text(config.ports.map(\.dockerFormat).joined(separator: ", "))
+                            .font(.caption).foregroundColor(.secondary)
+                    }
+                    Spacer()
+                    VariantButton("Add", icon: "plus", variant: .secondary) {
+                        state.manager.adopt([config])
+                    }
+                }
+            }
+            Text("Adding copies the image, ports, mounts, env vars and limits. The container is not recreated.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+        .padding(12)
+        .background(Color.orange.opacity(0.08))
+        .cornerRadius(8)
+        .padding([.horizontal, .top])
+    }
+
+    // MARK: - Containers
+
+    private var emptyState: some View {
                 VStack(spacing: 16) {
                     Image(systemName: "shippingbox")
                         .font(.system(size: 48))
@@ -64,7 +137,7 @@ struct ContainersListDetailView: View {
                         .font(.headline)
                         .foregroundColor(.secondary)
 
-                    Text("Add a container to get started")
+                    Text("Add a container, or press Scan to find ones created outside DevDash")
                         .font(.caption)
                         .foregroundColor(.secondary)
 
@@ -74,8 +147,10 @@ struct ContainersListDetailView: View {
                     .buttonStyle(.borderedProminent)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                Table(state.manager.containersList) {
+    }
+
+    private var containersTable: some View {
+                Table(containers) {
                     TableColumn("Name") { containerInfo in
                         HStack(spacing: 8) {
                             Circle()
@@ -94,7 +169,7 @@ struct ContainersListDetailView: View {
                     }
                     .width(min: 150, ideal: 200, max: 300)
 
-                    TableColumn("Docker ID") { containerInfo in
+                    TableColumn("ID") { containerInfo in
                         if let dockerId = containerInfo.dockerId {
                             InlineCopyableText(dockerId, monospaced: true)
                         } else {
@@ -188,11 +263,6 @@ struct ContainersListDetailView: View {
                     .width(min: 80, ideal: 80, max: 80)
                 }
                 .padding()
-            }
-        }
-        .task {
-            await state.manager.refreshContainersList()
-        }
     }
 
     private func statusColor(for status: ContainerInfo.ContainerStatus) -> Color {
@@ -204,36 +274,19 @@ struct ContainersListDetailView: View {
     }
 
     private func openLogsInTerminal(dockerId: String) {
-        let script = """
-        tell application "Terminal"
-            activate
-            do script "docker logs -f \(dockerId)"
-        end tell
-        """
-
-        let appleScript = NSAppleScript(source: script)
-        var error: NSDictionary?
-        appleScript?.executeAndReturnError(&error)
-
-        if let error = error {
-            print("AppleScript error: \(error)")
-        }
+        openInTerminal("\(engine.cli) logs -f \(ShellCommand.quote(dockerId))")
     }
 
     private func openExecInTerminal(dockerId: String, name: String) {
-        let script = """
-        tell application "Terminal"
-            activate
-            do script "docker exec -it \(dockerId) /bin/sh || docker exec -it \(dockerId) /bin/bash"
-        end tell
-        """
+        let id = ShellCommand.quote(dockerId)
+        openInTerminal("\(engine.cli) exec -it \(id) /bin/bash || \(engine.cli) exec -it \(id) /bin/sh")
+    }
 
-        let appleScript = NSAppleScript(source: script)
-        var error: NSDictionary?
-        appleScript?.executeAndReturnError(&error)
-
-        if let error = error {
-            print("AppleScript error: \(error)")
+    private func openInTerminal(_ command: String) {
+        do {
+            try TerminalLauncher.open(command: command)
+        } catch {
+            state.alertQueue.enqueue(title: "Couldn't Open Terminal", message: error.localizedDescription)
         }
     }
 }

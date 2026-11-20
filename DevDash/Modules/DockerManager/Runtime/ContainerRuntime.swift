@@ -95,100 +95,71 @@ class ContainerRuntime: ObservableObject, Identifiable, Hashable, OutputViewData
         logs = logLines.joined(separator: "\n")
     }
 
+    private var cli: String { config.resolvedEngine.cli }
+
     // MARK: - Status Check
 
-    /// Check container status using docker ps
+    /// Check container status (`docker ps` or `container inspect`)
     func checkStatus() async {
-        let containerName = config.name
+        let env = ProcessEnvironment.shared.getEnvironment()
+        let state: String?
+        switch config.resolvedEngine {
+        case .docker:
+            let r = await ShellCommand.run("docker", ["ps", "-a", "--filter", "name=^\(config.name)$", "--format", "{{.ID}},{{.State}}"], env: env)
+            let parts = r.stdout.split(separator: ",").map(String.init)
+            guard r.exitCode == 0, parts.count == 2 else { status = .unknown; dockerId = nil; return }
+            dockerId = parts[0]
+            state = parts[1]
+        case .apple:
+            // Apple's container ID is its name
+            let r = await ShellCommand.run("container", ["inspect", config.name], env: env)
+            struct Inspect: Decodable { struct Status: Decodable { let state: String? }; let status: Status? }
+            let decoded = try? JSONDecoder().decode([Inspect].self, from: Data(r.stdout.utf8))
+            guard r.exitCode == 0, let first = decoded?.first else { status = .unknown; dockerId = nil; return }
+            dockerId = config.name
+            state = first.status?.state
+        }
+        status = Self.status(from: state ?? "")
+    }
 
-        let result = await Task.detached(priority: .userInitiated) { () -> (ContainerInfo.ContainerStatus, String?) in
-            let task = Process()
-            task.executableURL = URL(fileURLWithPath: "/bin/zsh")
-            task.arguments = ["-l", "-c", "docker ps -a --filter name=^\(containerName)$ --format '{{.ID}},{{.State}}'"]
-
-            let pipe = Pipe()
-            task.standardOutput = pipe
-            task.standardError = pipe
-
-            do {
-                try task.run()
-                task.waitUntilExit()
-
-                let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                let output = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-
-                if output.isEmpty {
-                    return (.unknown, nil)
-                }
-
-                let parts = output.split(separator: ",").map(String.init)
-                guard parts.count == 2 else {
-                    return (.unknown, nil)
-                }
-
-                let dockerId = parts[0]
-                let stateString = parts[1].lowercased()
-
-                let status: ContainerInfo.ContainerStatus
-                if stateString.contains("running") {
-                    status = .running
-                } else if stateString.contains("exited") {
-                    status = .stopped
-                } else if stateString.contains("created") {
-                    status = .created
-                } else if stateString.contains("paused") {
-                    status = .paused
-                } else {
-                    status = .unknown
-                }
-
-                return (status, dockerId)
-            } catch {
-                return (.unknown, nil)
-            }
-        }.value
-
-        self.status = result.0
-        self.dockerId = result.1
+    nonisolated static func status(from state: String) -> ContainerInfo.ContainerStatus {
+        let s = state.lowercased()
+        if s.contains("running") { return .running }
+        if s.contains("exited") || s.contains("stopped") { return .stopped }
+        if s.contains("created") { return .created }
+        if s.contains("paused") { return .paused }
+        return .unknown
     }
 
     // MARK: - Container Operations
 
-    /// Create and start the container
+    /// Create (if missing) and start the container
     func start() {
         if isRunning { return }
 
         processingAction = .starting
 
         Task {
-            // Check Colima first
-            await DockerManagerState.shared.getColimaRuntime().checkStatus()
-            if !DockerManagerState.shared.colimaInfo.isRunning {
-                logs += "[Error] Colima is not running. Start Colima first.\n"
+            let host = DockerManagerState.shared.engineRuntime(config.resolvedEngine)
+            await host.checkStatus()
+            if !host.isRunning {
+                logs += "[Error] \(host.name) is not running. Start \(host.name) first.\n"
                 processingAction = nil
                 return
             }
 
-            // Check if container exists
             await checkStatus()
 
             if status == .unknown {
-                // Container doesn't exist - create it
                 await createContainer()
                 if status == .unknown {
-                    // Creation failed
                     processingAction = nil
                     return
                 }
             }
 
-            // Start the container
-            await startContainer()
-
-            // Stream logs
+            await run(["start", config.name], label: "Starting")
             await streamLogs()
-
-            // Verify started
             await checkStatus()
             processingAction = nil
         }
@@ -200,12 +171,10 @@ class ContainerRuntime: ObservableObject, Identifiable, Hashable, OutputViewData
 
         Task {
             await checkStatus()
-
-            if status == .running, let dockerId = dockerId {
-                await stopContainer(dockerId)
+            if status == .running {
+                await run(["stop", config.name], label: "Stopping")
             }
-
-            stopFlushTimer()
+            stopLogStream()
             await checkStatus()
             processingAction = nil
         }
@@ -216,134 +185,89 @@ class ContainerRuntime: ObservableObject, Identifiable, Hashable, OutputViewData
         processingAction = .restarting
 
         Task {
-            await stopContainer(config.name)
-            try? await Task.sleep(nanoseconds: 500_000_000)
-            await startContainer()
+            stopLogStream()
+            await run(["stop", config.name], label: "Stopping")
+            await run(["start", config.name], label: "Starting")
             await streamLogs()
             await checkStatus()
             processingAction = nil
         }
     }
 
-    /// Delete the container
+    /// Delete the container from the engine
     func delete() async {
         processingAction = .deleting
-
-        // Stop first if running
-        if isRunning {
-            await stopContainer(config.name)
+        stopLogStream()
+        switch config.resolvedEngine {
+        case .docker: await run(["rm", "-f", config.name], label: "Deleting")
+        case .apple: await run(["delete", "--force", config.name], label: "Deleting")
         }
-
-        await deleteContainer(config.name)
         await checkStatus()
         processingAction = nil
     }
 
-    // MARK: - Docker Commands
+    // MARK: - CLI Commands
 
     private func createContainer() async {
-        logs += "[Creating] Container '\(config.name)'\n"
+        let engine = config.resolvedEngine
+        var args = ["create", "--name", config.name]
 
-        var args = ["docker", "create", "--name", config.name]
-
-        // Ports
         for port in config.ports {
-            args.append("-p")
-            args.append(port.dockerFormat)
+            args += ["-p", port.dockerFormat]
         }
-
-        // Volumes
         for volume in config.volumes {
-            args.append("-v")
-            args.append(volume.dockerFormat)
+            args += ["-v", volume.dockerFormat]
         }
-
-        // Environment
-        for (key, value) in config.environment {
-            args.append("-e")
-            args.append("\(key)=\(value)")
+        for (key, value) in config.environment.sorted(by: { $0.key < $1.key }) {
+            args += ["-e", "\(key)=\(value)"]
         }
-
-        // Network
         if let network = config.network, !network.isEmpty {
-            args.append("--network")
-            args.append(network)
+            args += ["--network", network]
         }
-
-        // Restart policy
-        if let policy = config.restartPolicy, !policy.isEmpty {
-            args.append("--restart")
-            args.append(policy)
+        // Apple's CLI has no restart policy
+        if engine == .docker, let policy = config.restartPolicy, !policy.isEmpty {
+            args += ["--restart", policy]
         }
-
-        // CPU limit
         if let cpu = config.cpuLimit, !cpu.isEmpty {
-            args.append("--cpus")
-            args.append(cpu)
+            args += ["--cpus", cpu]
         }
-
-        // Memory limit
         if let memory = config.memoryLimit, !memory.isEmpty {
-            args.append("--memory")
-            args.append(memory)
+            args += ["--memory", memory]
+        }
+        for param in config.additionalParams where !param.flag.isEmpty {
+            args.append(param.flag)
+            if !param.value.isEmpty { args.append(param.value) }
         }
 
-        // Additional params
-        for param in config.additionalParams {
-            if !param.flag.isEmpty {
-                args.append(param.flag)
-                if !param.value.isEmpty {
-                    args.append(param.value)
-                }
-            }
-        }
-
-        // Image
         args.append(config.image)
 
-        // Command override
+        // ponytail: command split on spaces, quoted arguments are not kept together
         if let command = config.command, !command.isEmpty {
-            args.append(contentsOf: command.split(separator: " ").map(String.init))
+            args += command.split(separator: " ").map(String.init)
         }
 
-        let output = await runDockerCommand(args)
-        logs += output
-
+        await run(args, label: "Creating")
         await checkStatus()
     }
 
-    private func startContainer() async {
-        logs += "[Starting] Container '\(config.name)'\n"
-
-        let output = await runDockerCommand(["docker", "start", config.name])
-        logs += output
-    }
-
-    private func stopContainer(_ nameOrId: String) async {
-        logs += "[Stopping] Container '\(nameOrId)'\n"
-
-        let output = await runDockerCommand(["docker", "stop", nameOrId])
-        logs += output
-    }
-
-    private func deleteContainer(_ nameOrId: String) async {
-        logs += "[Deleting] Container '\(nameOrId)'\n"
-
-        let output = await runDockerCommand(["docker", "rm", "-f", nameOrId])
-        logs += output
+    /// Run `<cli> args` and append the result to the logs
+    private func run(_ args: [String], label: String) async {
+        logs += "[\(label)] Container '\(config.name)'\n"
+        let r = await ShellCommand.run(cli, args, env: ProcessEnvironment.shared.getEnvironment())
+        if !r.stdout.isEmpty { logs += r.stdout + "\n" }
+        if !r.stderr.isEmpty { logs += r.stderr + "\n" }
     }
 
     private func streamLogs() async {
-        guard let dockerId = dockerId else { return }
+        guard let dockerId = dockerId, process == nil else { return }
 
         logs += "[Logs] Streaming logs for '\(config.name)'\n"
 
-        // Start log streaming in background
         let process = Process()
         let pipe = Pipe()
 
-        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        process.arguments = ["-l", "-c", "docker logs -f \(dockerId)"]
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = [cli, "logs", "-f", dockerId]
         process.environment = ProcessEnvironment.shared.getEnvironment()
 
         process.standardOutput = pipe
@@ -352,15 +276,9 @@ class ContainerRuntime: ObservableObject, Identifiable, Hashable, OutputViewData
         self.process = process
         self.pipe = pipe
 
-        let fileHandle = pipe.fileHandleForReading
-        fileHandle.readabilityHandler = { [weak self] handle in
-            guard let self else { return }
-
+        pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
-            guard data.count > 0, let output = String(data: data, encoding: .utf8) else {
-                return
-            }
-
+            guard data.count > 0, let output = String(data: data, encoding: .utf8) else { return }
             Task { @MainActor [weak self] in
                 self?.logBuffer += output
             }
@@ -370,11 +288,7 @@ class ContainerRuntime: ObservableObject, Identifiable, Hashable, OutputViewData
 
         process.terminationHandler = { [weak self] _ in
             Task { @MainActor [weak self] in
-                guard let self else { return }
-                self.pipe?.fileHandleForReading.readabilityHandler = nil
-                try? self.pipe?.fileHandleForReading.close()
-                self.pipe = nil
-                self.stopFlushTimer()
+                self?.stopLogStream()
             }
         }
 
@@ -382,31 +296,18 @@ class ContainerRuntime: ObservableObject, Identifiable, Hashable, OutputViewData
             try process.run()
         } catch {
             logs += "[Error] Failed to stream logs: \(error.localizedDescription)\n"
+            stopLogStream()
         }
     }
 
-    private func runDockerCommand(_ args: [String]) async -> String {
-        await Task.detached(priority: .userInitiated) { () -> String in
-            let task = Process()
-            task.executableURL = URL(fileURLWithPath: "/bin/zsh")
-            task.arguments = ["-l", "-c", args.joined(separator: " ")]
-            task.environment = ProcessEnvironment.shared.getEnvironment()
-
-            let pipe = Pipe()
-            task.standardOutput = pipe
-            task.standardError = pipe
-
-            do {
-                try task.run()
-                task.waitUntilExit()
-
-                let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                let output = String(data: data, encoding: .utf8) ?? ""
-                return output.isEmpty ? "" : output + "\n"
-            } catch {
-                return "[Error] \(error.localizedDescription)\n"
-            }
-        }.value
+    /// Stop the `logs -f` process and flush what was read
+    private func stopLogStream() {
+        pipe?.fileHandleForReading.readabilityHandler = nil
+        try? pipe?.fileHandleForReading.close()
+        pipe = nil
+        if process?.isRunning == true { process?.terminate() }
+        process = nil
+        stopFlushTimer()
     }
 
     // MARK: - OutputViewDataSource Protocol

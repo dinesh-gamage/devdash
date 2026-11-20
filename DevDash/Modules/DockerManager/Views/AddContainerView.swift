@@ -10,6 +10,7 @@ import SwiftUI
 struct AddContainerView: View {
     @Environment(\.dismiss) var dismiss
     @ObservedObject var manager: DockerManager
+    @State var engine: ContainerEngine
 
     @State private var name = ""
     @State private var image = ""
@@ -27,6 +28,7 @@ struct AddContainerView: View {
     var body: some View {
         NavigationStack {
             ContainerFormContent(
+                engine: $engine,
                 name: $name,
                 image: $image,
                 ports: $ports,
@@ -67,7 +69,8 @@ struct AddContainerView: View {
             cpuLimit: cpuLimit.isEmpty ? nil : cpuLimit,
             memoryLimit: memoryLimit.isEmpty ? nil : memoryLimit,
             additionalParams: additionalParams.filter { !$0.flag.isEmpty },
-            maxLogLines: Int(maxLogLines)
+            maxLogLines: Int(maxLogLines),
+            engine: engine
         )
 
         manager.addContainer(config)

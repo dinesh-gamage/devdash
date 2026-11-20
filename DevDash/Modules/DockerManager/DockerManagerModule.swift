@@ -12,7 +12,7 @@ struct DockerManagerModule: DevDashModule {
     let id = "docker-manager"
     let name = "Docker Manager"
     let icon = "shippingbox.fill"
-    let description = "Manage Docker containers with Colima"
+    let description = "Containers on Colima and Apple Containers"
     let accentColor = Color.blue
 
     func makeSidebarView() -> AnyView {
@@ -30,20 +30,32 @@ struct DockerManagerModule: DevDashModule {
     }
 
     func exportForBackup() async throws -> Data {
-        let manager = DockerManagerState.shared.manager
-        // Export backup data (manager handles this internally)
-        return try await manager.exportBackupData()
+        try await DockerManagerState.shared.manager.exportBackupData()
     }
 }
 
-// MARK: - Docker Section (3 static items)
+// MARK: - Docker Section (engine host, then its containers and images)
 
-enum DockerSection: String, Identifiable, Hashable, CaseIterable {
-    case colima = "Colima"
-    case containers = "Containers"
-    case images = "Images"
+enum DockerSection: Identifiable, Hashable {
+    case host(ContainerEngine)
+    case containers(ContainerEngine)
+    case images(ContainerEngine)
 
-    var id: String { rawValue }
+    var id: String {
+        switch self {
+        case .host(let e): return "host-\(e.rawValue)"
+        case .containers(let e): return "containers-\(e.rawValue)"
+        case .images(let e): return "images-\(e.rawValue)"
+        }
+    }
+
+    var engine: ContainerEngine {
+        switch self {
+        case .host(let e), .containers(let e), .images(let e): return e
+        }
+    }
+
+    static let all: [DockerSection] = ContainerEngine.allCases.flatMap { [.host($0), .containers($0), .images($0)] }
 }
 
 // MARK: - Shared State
@@ -55,8 +67,8 @@ class DockerManagerState: ObservableObject {
     let alertQueue = AlertQueue()
     let toastQueue = ToastQueue()
     @Published var manager: DockerManager
-    @Published var colimaInfo: ColimaInfo
-    @Published var selectedSection: DockerSection? = .colima
+    @Published var engineInfo: [ContainerEngine: EngineInfo] = [:]
+    @Published var selectedSection: DockerSection? = .containers(.apple)
     @Published var showingAddContainer = false
     @Published var showingEditContainer = false
     @Published var containerToEdit: ContainerRuntime?
@@ -65,17 +77,15 @@ class DockerManagerState: ObservableObject {
     @Published var imageToDelete: ImageInfo?
     @Published var showingDeleteImageConfirmation = false
 
-    // Private - access via getColimaRuntime() for detail views
-    private var colimaRuntime: ColimaRuntime
+    // Private - access via engineRuntime(_:) for detail views
+    private var engineRuntimes: [ContainerEngine: EngineRuntime] = [:]
     private var cancellables = Set<AnyCancellable>()
+
+    /// Engine of the selected section. New containers default to it.
+    var selectedEngine: ContainerEngine { selectedSection?.engine ?? .apple }
 
     private init() {
         self.manager = DockerManager(alertQueue: alertQueue, toastQueue: toastQueue)
-        self.colimaRuntime = ColimaRuntime()
-        self.colimaInfo = ColimaInfo(
-            isRunning: false,
-            processingAction: nil
-        )
 
         // Forward manager changes to state
         manager.objectWillChange.sink { [weak self] _ in
@@ -83,24 +93,27 @@ class DockerManagerState: ObservableObject {
         }
         .store(in: &cancellables)
 
-        // Subscribe to colima changes to refresh colimaInfo
-        colimaRuntime.objectWillChange.sink { [weak self] _ in
-            self?.refreshColimaInfo()
+        for engine in ContainerEngine.allCases {
+            let runtime = EngineRuntime(engine: engine)
+            engineRuntimes[engine] = runtime
+            engineInfo[engine] = EngineInfo(isRunning: false, processingAction: nil)
+            // Refresh lightweight engineInfo when the host changes
+            Publishers.CombineLatest3(runtime.$isRunning, runtime.$processingAction, runtime.$colima)
+                .sink { [weak self] running, action, colima in
+                    self?.engineInfo[engine] = EngineInfo(isRunning: running, processingAction: action,
+                                                          isSetUp: engine != .docker || colima != nil)
+                }
+                .store(in: &cancellables)
         }
-        .store(in: &cancellables)
     }
 
-    /// Get full ColimaRuntime for detail views (on-demand)
-    func getColimaRuntime() -> ColimaRuntime {
-        return colimaRuntime
+    /// Full EngineRuntime for detail views (on-demand)
+    func engineRuntime(_ engine: ContainerEngine) -> EngineRuntime {
+        engineRuntimes[engine]!
     }
 
-    /// Refresh lightweight colimaInfo from runtime
-    private func refreshColimaInfo() {
-        colimaInfo = ColimaInfo(
-            isRunning: colimaRuntime.isRunning,
-            processingAction: colimaRuntime.processingAction
-        )
+    func isRunning(_ engine: ContainerEngine) -> Bool {
+        engineInfo[engine]?.isRunning == true
     }
 }
 
@@ -115,64 +128,28 @@ struct DockerManagerSidebarView: View {
                 ToolbarButtonConfig(icon: "plus.circle", help: "Add Container") {
                     state.showingAddContainer = true
                 },
+                ToolbarButtonConfig(icon: "square.and.arrow.down", help: "Import Containers") {
+                    state.manager.importContainers()
+                },
                 ToolbarButtonConfig(icon: "square.and.arrow.up", help: "Export Containers") {
                     state.manager.exportContainers()
                 }
             ],
-            items: DockerSection.allCases,
+            items: DockerSection.all,
             emptyState: EmptyStateConfig(
                 icon: "shippingbox",
                 title: "Docker Manager",
-                subtitle: "Manage Colima, containers, and images"
+                subtitle: "Manage engines, containers, and images"
             ),
             selectedItem: Binding(
                 get: { state.selectedSection },
                 set: { state.selectedSection = $0 }
             )
         ) { section, isSelected in
-            switch section {
-            case .colima:
-                return ModuleSidebarListItem(
-                    icon: .image(systemName: "server.rack", color: state.colimaInfo.isRunning ? AppTheme.statusRunning : AppTheme.statusStopped),
-                    title: "Colima",
-                    subtitle: state.colimaInfo.isRunning ? "Running" : "Stopped",
-                    badge: nil,
-                    actions: [],
-                    isSelected: isSelected,
-                    onTap: {
-                        state.selectedSection = .colima
-                    }
-                )
-
-            case .containers:
-                return ModuleSidebarListItem(
-                    icon: .image(systemName: "shippingbox", color: .accentColor),
-                    title: "Containers",
-                    subtitle: "\(state.manager.containersList.count) containers",
-                    badge: nil,
-                    actions: [],
-                    isSelected: isSelected,
-                    onTap: {
-                        state.selectedSection = .containers
-                    }
-                )
-
-            case .images:
-                return ModuleSidebarListItem(
-                    icon: .image(systemName: "cube.fill", color: .accentColor),
-                    title: "Images",
-                    subtitle: "\(state.manager.imagesList.count) images",
-                    badge: nil,
-                    actions: [],
-                    isSelected: isSelected,
-                    onTap: {
-                        state.selectedSection = .images
-                    }
-                )
-            }
+            row(section, isSelected: isSelected)
         }
         .sheet(isPresented: $state.showingAddContainer) {
-            AddContainerView(manager: state.manager)
+            AddContainerView(manager: state.manager, engine: state.selectedEngine)
         }
         .sheet(isPresented: $state.showingEditContainer) {
             if let container = state.containerToEdit {
@@ -184,7 +161,13 @@ struct DockerManagerSidebarView: View {
             Button("Cancel", role: .cancel) {
                 state.containerToDelete = nil
             }
-            Button("Delete", role: .destructive) {
+            Button("Remove from DevDash") {
+                if let container = state.containerToDelete {
+                    state.manager.removeContainer(id: container.id)
+                }
+                state.containerToDelete = nil
+            }
+            Button("Delete Container", role: .destructive) {
                 if let container = state.containerToDelete {
                     Task {
                         await state.manager.deleteContainer(id: container.id)
@@ -194,7 +177,7 @@ struct DockerManagerSidebarView: View {
             }
         } message: {
             if let container = state.containerToDelete {
-                Text("Are you sure you want to delete '\(container.config.name)'? This action cannot be undone.")
+                Text("'Remove from DevDash' keeps the container in \(container.config.resolvedEngine.hostName). 'Delete Container' also deletes it there. That cannot be undone.")
             }
         }
         .alert("Delete Image", isPresented: $state.showingDeleteImageConfirmation) {
@@ -218,148 +201,120 @@ struct DockerManagerSidebarView: View {
             AppTheme.AccentColor.shared.set(.blue)
         }
     }
+
+    private func row(_ section: DockerSection, isSelected: Bool) -> ModuleSidebarListItem {
+        let engine = section.engine
+        let select = { state.selectedSection = section }
+        switch section {
+        case .host:
+            let running = state.isRunning(engine)
+            let setUp = state.engineInfo[engine]?.isSetUp ?? true
+            return ModuleSidebarListItem(
+                icon: .image(systemName: engine == .docker ? "server.rack" : "apple.logo",
+                             color: running ? AppTheme.statusRunning : AppTheme.statusStopped),
+                title: engine.hostName,
+                subtitle: running ? "Running" : setUp ? "Stopped" : "Not set up",
+                isSelected: isSelected,
+                onTap: select
+            )
+        case .containers:
+            let found = state.manager.discovered[engine]?.count ?? 0
+            return ModuleSidebarListItem(
+                icon: .image(systemName: "shippingbox", color: .accentColor),
+                title: "Containers",
+                subtitle: "\(state.manager.containers(for: engine).count) containers",
+                badge: found > 0 ? Badge("\(found) new", variant: .warning) : nil,
+                isSelected: isSelected,
+                indent: 20,
+                onTap: select
+            )
+        case .images:
+            return ModuleSidebarListItem(
+                icon: .image(systemName: "cube.fill", color: .accentColor),
+                title: "Images",
+                subtitle: "\(state.manager.images[engine]?.count ?? 0) images",
+                isSelected: isSelected,
+                indent: 20,
+                onTap: select
+            )
+        }
+    }
 }
 
 // MARK: - Detail View
 
 struct DockerManagerDetailView: View {
     @ObservedObject var state = DockerManagerState.shared
-    @State private var colimaCheckComplete = false
-    @State private var isCheckingColima = false
 
     var body: some View {
-        Group {
-            if !colimaCheckComplete {
-                // Initial Colima check gate
-                ColimaCheckGateView(
-                    isChecking: $isCheckingColima,
-                    onCheckComplete: {
-                        colimaCheckComplete = true
-                    }
-                )
-            } else if let selectedSection = state.selectedSection {
-                switch selectedSection {
-                case .colima:
-                    ColimaDetailView()
-                case .containers:
-                    ContainersListDetailView()
-                case .images:
-                    ImagesListDetailView()
+        if let section = state.selectedSection {
+            Group {
+                switch section {
+                case .host(let engine):
+                    EngineDetailView(host: state.engineRuntime(engine))
+                case .containers(let engine):
+                    ContainersListDetailView(engine: engine)
+                case .images(let engine):
+                    ImagesListDetailView(engine: engine)
                 }
-            } else {
-                VStack(spacing: 16) {
-                    Image(systemName: "shippingbox")
-                        .font(.system(size: 64))
-                        .foregroundColor(.secondary)
-
-                    Text("Select a Section")
-                        .font(.title2)
-                        .foregroundColor(.secondary)
-
-                    Text("Choose Colima, Containers, or Images from the sidebar")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-        }
-        .task {
-            // Check Colima status once on appear
-            if !colimaCheckComplete && !isCheckingColima {
-                isCheckingColima = true
-                await state.getColimaRuntime().checkStatus()
+            .id(section)  // Reset view state when switching engine
+        } else {
+            VStack(spacing: 16) {
+                Image(systemName: "shippingbox")
+                    .font(.system(size: 64))
+                    .foregroundColor(.secondary)
 
-                if state.colimaInfo.isRunning {
-                    // If already running, complete check immediately
-                    colimaCheckComplete = true
-                }
-                isCheckingColima = false
+                Text("Select a Section")
+                    .font(.title2)
+                    .foregroundColor(.secondary)
+
+                Text("Choose an engine, its containers, or its images from the sidebar")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 }
 
-// MARK: - Colima Check Gate View
+// MARK: - Engine Not Running
 
-struct ColimaCheckGateView: View {
-    @ObservedObject var state = DockerManagerState.shared
-    @Binding var isChecking: Bool
-    let onCheckComplete: () -> Void
+/// Shown in place of containers/images when the engine host is stopped.
+struct EngineStoppedView: View {
+    @ObservedObject var host: EngineRuntime
 
     var body: some View {
-        VStack(spacing: 24) {
-            if isChecking {
-                // Initial check
-                ProgressView()
-                    .scaleEffect(1.5)
-
-                Text("Checking Colima status...")
-                    .font(.headline)
-                    .foregroundColor(.secondary)
-            } else if state.colimaInfo.processingAction == .starting {
-                // Starting Colima
-                VStack(spacing: 16) {
-                    ProgressView()
-                        .scaleEffect(1.5)
-
-                    Text("Starting Colima...")
-                        .font(.headline)
-
-                    Text("This may take a few moments")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+        VStack(spacing: 20) {
+            if host.processingAction == .starting {
+                ProgressView().scaleEffect(1.5)
+                Text("Starting \(host.name)...").font(.headline)
+                Text("This may take a few moments").font(.caption).foregroundColor(.secondary)
+            } else if host.engine == .docker && host.colima == nil {
+                Image(systemName: "server.rack")
+                    .font(.system(size: 64))
+                    .foregroundColor(.orange)
+                Text("Colima is not set up")
+                    .font(.title2)
+                    .fontWeight(.semibold)
+                VariantButton("Set Up Colima", icon: "plus", variant: .primary) {
+                    DockerManagerState.shared.selectedSection = .host(.docker)
                 }
-            } else if !state.colimaInfo.isRunning {
-                // Colima not running - show start option
-                VStack(spacing: 20) {
-                    Image(systemName: "server.rack")
-                        .font(.system(size: 64))
-                        .foregroundColor(.orange)
-
-                    Text("Colima is not running")
-                        .font(.title2)
-                        .fontWeight(.semibold)
-
-                    Text("Docker containers require Colima to be running")
-                        .font(.body)
-                        .foregroundColor(.secondary)
-                        .multilineTextAlignment(.center)
-
-                    VariantButton("Start Colima", icon: "play.fill", variant: .primary) {
-                        startColimaAndWait()
-                    }
-                    .controlSize(.large)
+                .controlSize(.large)
+            } else {
+                Image(systemName: "server.rack")
+                    .font(.system(size: 64))
+                    .foregroundColor(.orange)
+                Text("\(host.name) is not running")
+                    .font(.title2)
+                    .fontWeight(.semibold)
+                VariantButton("Start \(host.name)", icon: "play.fill", variant: .primary) {
+                    host.start()
                 }
-                .padding(40)
+                .controlSize(.large)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .onChange(of: state.colimaInfo.isRunning) { _, newValue in
-            if newValue && state.colimaInfo.processingAction == nil {
-                // Colima is running and not processing - complete the gate
-                onCheckComplete()
-            }
-        }
-    }
-
-    private func startColimaAndWait() {
-        let colima = state.getColimaRuntime()
-        colima.start()
-
-        // Poll for completion
-        Task {
-            while state.colimaInfo.processingAction == .starting {
-                try? await Task.sleep(nanoseconds: 500_000_000) // 0.5s
-            }
-
-            // Double-check status after start completes
-            await colima.checkStatus()
-
-            if state.colimaInfo.isRunning {
-                await MainActor.run {
-                    onCheckComplete()
-                }
-            }
-        }
+        .padding(40)
     }
 }

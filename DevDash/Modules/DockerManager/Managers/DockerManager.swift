@@ -13,7 +13,10 @@ import Combine
 class DockerManager: ObservableObject {
     // Public - lightweight lists for consumers
     @Published var containersList: [ContainerInfo] = []
-    @Published var imagesList: [ImageInfo] = []
+    @Published var images: [ContainerEngine: [ImageInfo]] = [:]
+    /// Containers found in an engine that DevDash doesn't track yet
+    @Published var discovered: [ContainerEngine: [ContainerConfig]] = [:]
+    @Published private(set) var scanning: Set<ContainerEngine> = []
     @Published private(set) var isLoading = false
 
     // Private - full runtimes with logs/processes
@@ -27,9 +30,6 @@ class DockerManager: ObservableObject {
         self.alertQueue = alertQueue
         self.toastQueue = toastQueue
         loadContainers()
-        Task {
-            await refreshImagesList()
-        }
     }
 
     func loadContainers() {
@@ -72,6 +72,7 @@ class DockerManager: ObservableObject {
                 id: runtime.id,
                 name: runtime.config.name,
                 image: runtime.config.image,
+                engine: runtime.config.resolvedEngine,
                 status: runtime.status,
                 dockerId: runtime.dockerId,
                 ports: runtime.config.ports,
@@ -96,57 +97,73 @@ class DockerManager: ObservableObject {
         refreshContainersListSync()
     }
 
-    /// Refresh images list from docker
-    func refreshImagesList() async {
-        let images = await Task.detached(priority: .userInitiated) { () -> [ImageInfo] in
-            let task = Process()
-            task.executableURL = URL(fileURLWithPath: "/bin/zsh")
-            task.arguments = ["-l", "-c", "docker images --format '{{.Repository}}|||{{.Tag}}|||{{.ID}}|||{{.Size}}'"]
-            task.environment = ProcessEnvironment.shared.getEnvironment()
+    /// Containers of one engine
+    func containers(for engine: ContainerEngine) -> [ContainerInfo] {
+        containersList.filter { $0.engine == engine }
+    }
 
-            let pipe = Pipe()
-            task.standardOutput = pipe
-            task.standardError = pipe
-
-            do {
-                try task.run()
-                task.waitUntilExit()
-
-                let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                let output = String(data: data, encoding: .utf8) ?? ""
-
-                var images: [ImageInfo] = []
-                for line in output.components(separatedBy: .newlines) {
-                    guard !line.isEmpty else { continue }
-
-                    let parts = line.split(separator: "|||").map(String.init)
-                    guard parts.count == 4 else { continue }
-
-                    let repository = parts[0]
-                    let tag = parts[1]
-                    let imageId = parts[2]
-                    let size = parts[3]
-
-                    // Skip <none> images
-                    guard repository != "<none>" else { continue }
-
-                    images.append(ImageInfo(
-                        id: "\(repository):\(tag)",
-                        repository: repository,
-                        tag: tag,
-                        imageId: imageId,
-                        size: size,
-                        createdAt: nil
-                    ))
-                }
-
-                return images
-            } catch {
-                return []
+    /// Refresh one engine's images
+    func refreshImages(_ engine: ContainerEngine) async {
+        let env = ProcessEnvironment.shared.getEnvironment()
+        switch engine {
+        case .docker:
+            let r = await ShellCommand.run("docker", ["images", "--format", "{{.Repository}}|||{{.Tag}}|||{{.ID}}|||{{.Size}}"], env: env)
+            images[engine] = r.stdout.split(whereSeparator: \.isNewline).compactMap { line in
+                let parts = line.components(separatedBy: "|||")
+                guard parts.count == 4, parts[0] != "<none>" else { return nil }
+                return ImageInfo(id: "\(parts[0]):\(parts[1])", engine: .docker, repository: parts[0], tag: parts[1],
+                                 imageId: parts[2], size: parts[3], createdAt: nil)
             }
-        }.value
+        case .apple:
+            struct AppleImage: Decodable {
+                struct Configuration: Decodable { let name: String }
+                struct Variant: Decodable { let size: Int? }
+                let id: String
+                let configuration: Configuration
+                let variants: [Variant]?
+            }
+            let r = await ShellCommand.run("container", ["image", "list", "--format", "json"], env: env)
+            let decoded = (try? JSONDecoder().decode([AppleImage].self, from: Data(r.stdout.utf8))) ?? []
+            images[engine] = decoded.map { img in
+                // name is "registry/repo:tag"
+                let name = img.configuration.name
+                let colon = name.lastIndex(of: ":").flatMap { name[$0...].contains("/") ? nil : $0 }
+                let repo = colon.map { String(name[..<$0]) } ?? name
+                let tag = colon.map { String(name[name.index(after: $0)...]) } ?? "latest"
+                // ponytail: size is the largest platform variant, not what is on disk
+                let bytes = Int64(img.variants?.compactMap(\.size).max() ?? 0)
+                return ImageInfo(id: name, engine: .apple, repository: repo, tag: tag,
+                                 imageId: String(img.id.prefix(12)),
+                                 size: ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file), createdAt: nil)
+            }
+        }
+    }
 
-        imagesList = images
+    // MARK: - Scan
+
+    /// Find containers in the engine that DevDash doesn't track (matched by name)
+    func scan(_ engine: ContainerEngine) async {
+        guard !scanning.contains(engine) else { return }
+        scanning.insert(engine)
+        defer { scanning.remove(engine) }
+
+        let found = await ContainerScanner.scan(engine)
+        let tracked = Set(runtimes.values.filter { $0.config.resolvedEngine == engine }.map(\.config.name))
+        discovered[engine] = found.filter { !tracked.contains($0.name) }.sorted { $0.name < $1.name }
+    }
+
+    /// Add scanned containers to DevDash. They already exist, so nothing is created.
+    func adopt(_ configs: [ContainerConfig]) {
+        for config in configs {
+            let runtime = ContainerRuntime(config: config)
+            subscribeToRuntime(runtime)
+            runtimes[config.id] = runtime
+            discovered[config.resolvedEngine]?.removeAll { $0.id == config.id }
+            Task { await runtime.checkStatus() }
+        }
+        saveContainers()
+        refreshContainersListSync()
+        toastQueue?.enqueue(message: configs.count == 1 ? "'\(configs[0].name)' added" : "\(configs.count) containers added")
     }
 
     /// Subscribe to runtime changes to auto-refresh list (without checkStatus to avoid infinite loop)
@@ -189,28 +206,6 @@ class DockerManager: ObservableObject {
         }
     }
 
-    func deleteContainer(at offsets: IndexSet) {
-        let sortedContainers = runtimes.values.sorted { $0.config.name < $1.config.name }
-
-        Task {
-            for index in offsets {
-                let container = sortedContainers[index]
-
-                // Delete from Docker
-                await container.delete()
-
-                await MainActor.run {
-                    runtimes.removeValue(forKey: container.id)
-                }
-            }
-
-            await MainActor.run {
-                saveContainers()
-                refreshContainersListSync()
-            }
-        }
-    }
-
     func deleteContainer(id: UUID) async {
         guard let container = runtimes[id] else { return }
 
@@ -220,6 +215,15 @@ class DockerManager: ObservableObject {
         runtimes.removeValue(forKey: id)
         saveContainers()
         refreshContainersListSync()
+    }
+
+    /// Stop tracking a container in DevDash. The container stays in its engine.
+    func removeContainer(id: UUID) {
+        guard let runtime = runtimes.removeValue(forKey: id) else { return }
+        saveContainers()
+        refreshContainersListSync()
+        toastQueue?.enqueue(message: "'\(runtime.config.name)' removed from DevDash")
+        Task { await scan(runtime.config.resolvedEngine) }
     }
 
     func checkAllContainers() {
@@ -232,34 +236,14 @@ class DockerManager: ObservableObject {
 
 
     func deleteImage(_ imageInfo: ImageInfo) async {
-        let output = await Task.detached(priority: .userInitiated) { () -> String in
-            let task = Process()
-            task.executableURL = URL(fileURLWithPath: "/bin/zsh")
-            task.arguments = ["-l", "-c", "docker rmi \(imageInfo.id)"]
-            task.environment = ProcessEnvironment.shared.getEnvironment()
-
-            let pipe = Pipe()
-            task.standardOutput = pipe
-            task.standardError = pipe
-
-            do {
-                try task.run()
-                task.waitUntilExit()
-
-                let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                return String(data: data, encoding: .utf8) ?? ""
-            } catch {
-                return "Error: \(error.localizedDescription)"
-            }
-        }.value
-
-        if output.contains("Untagged") || output.contains("Deleted") {
+        let args = imageInfo.engine == .docker ? ["rmi", imageInfo.id] : ["image", "delete", imageInfo.id]
+        let r = await ShellCommand.run(imageInfo.engine.cli, args, env: ProcessEnvironment.shared.getEnvironment())
+        if r.exitCode == 0 {
             toastQueue?.enqueue(message: "Deleted '\(imageInfo.id)'")
         } else {
-            alertQueue?.enqueue(title: "Delete Failed", message: output)
+            alertQueue?.enqueue(title: "Delete Failed", message: r.stderr.isEmpty ? r.stdout : r.stderr)
         }
-
-        await refreshImagesList()
+        await refreshImages(imageInfo.engine)
     }
 
     // MARK: - Backup Export
@@ -321,8 +305,15 @@ class DockerManager: ObservableObject {
                         let trimmedName = config.name.trimmingCharacters(in: .whitespaces)
                         if let existing = self.runtimes.values.first(where: {
                             $0.config.name.trimmingCharacters(in: .whitespaces) == trimmedName
+                                && $0.config.resolvedEngine == config.resolvedEngine
                         }) {
-                            let runtime = ContainerRuntime(config: config)
+                            // Keep the existing id so the list selection stays stable
+                            let updated = ContainerConfig(id: existing.id, name: config.name, image: config.image, ports: config.ports,
+                                                     volumes: config.volumes, environment: config.environment, network: config.network,
+                                                     command: config.command, restartPolicy: config.restartPolicy, cpuLimit: config.cpuLimit,
+                                                     memoryLimit: config.memoryLimit, additionalParams: config.additionalParams,
+                                                     maxLogLines: config.maxLogLines, engine: config.resolvedEngine)
+                            let runtime = ContainerRuntime(config: updated)
                             self.subscribeToRuntime(runtime)
                             self.runtimes[existing.id] = runtime
                             updatedCount += 1

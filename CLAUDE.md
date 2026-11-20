@@ -11,9 +11,11 @@ DevDash is a native macOS application built with SwiftUI for managing local deve
 4. **AWS Vault Profiles** - Manage aws-vault profiles and cached credential sessions
 5. **Resource Monitor** - System and DevDash CPU/memory/swap/network/disk metrics and top processes
 6. **Storage Manager** - Scan for junk, caches, large/old and duplicate files, then move them to Trash
-7. **Docker Manager** - Manage Colima, Docker containers and images
-8. **Settings** - Encrypted per-module backup to S3 and restore
-9. **Dashboard** - Home screen with count widgets and summary panels from each module
+7. **Docker Manager** - Containers and images on two engines: Docker (Colima) and Apple Containers
+8. **Virtual Machines** - Lima VMs and Apple container machines
+9. **Route 53 Records** - Keep selected A records pointed at EC2 IPs
+10. **Settings** - Encrypted per-module backup to S3 and restore
+11. **Dashboard** - Home screen with count widgets and summary panels from each module
 
 ## Development Rules
 
@@ -48,7 +50,9 @@ The app uses a **module-based architecture** where each feature is an independen
 - **AWSVaultManagerModule** (`aws-vault-manager`) - aws-vault profiles
 - **ResourceMonitorModule** (`resource-monitor`) - System/DevDash metrics
 - **StorageManagerModule** (`storage-manager`) - Disk cleanup
-- **DockerManagerModule** (`docker-manager`) - Colima, containers, images
+- **DockerManagerModule** (`docker-manager`) - Colima / Apple Containers, containers, images
+- **VMManagerModule** (`vm-manager`) - Lima VMs and Apple container machines
+- **Route53ManagerModule** (`route53-manager`) - Selected Route 53 A records
 - **SettingsModule** (`settings`) - Backup/restore; shown at the bottom of the sidebar, not in the module list
 
 ### Directory Structure
@@ -161,6 +165,7 @@ Key components in `Modules/CredentialsManager/`:
   - Refuses to create missing records and does not support alias records.
 - "Update from EC2" calls `InstanceGroupManager.refreshPublicIP`, which also refreshes the EC2 module's cached IP.
 - UserDefaults keys "route53Zones" and "route53ChangeLog" (newest 500 entries). The backup file is `route53.json`.
+- Import/export covers zones and records only. Import matches zones by zone ID and records by name. It adds and updates, never deletes.
 
 ### AWS Vault Manager Module (`Modules/AWSVaultManager/`)
 - **AWSVaultManager**: profile metadata in UserDefaults key "awsVaultProfiles", aws-vault CLI integration, Keychain health check
@@ -179,9 +184,18 @@ Key components in `Modules/CredentialsManager/`:
 - SAFETY: `cleanSelected()` always moves to Trash. Permanent delete is disabled on purpose until validated.
 
 ### Docker Manager Module (`Modules/DockerManager/`)
-- Sections: Colima, Containers, Images
-- **DockerManager**: container configs in UserDefaults key "containers"; `ContainerRuntime` per container; images via `docker images`
-- **ColimaRuntime**: Colima status/start/stop/restart
+- Two engines (`ContainerEngine`): `.docker` (Colima, `docker` CLI) and `.apple` (`container` CLI). `ContainerConfig.engine` nil means docker.
+- Sidebar: Apple Containers first, then Colima. Each engine host (start/stop via `EngineRuntime`), then its Containers and Images.
+- Colima: the host page creates, edits (CPUs, memory, disk) and deletes the default instance. Status comes from `colima list --json` (`ColimaInstance`).
+- **DockerManager**: container configs in UserDefaults key "containers"; `ContainerRuntime` per container; images per engine.
+- **ContainerScanner**: finds containers created outside DevDash and maps them to `ContainerConfig` (drops env vars that match the image defaults). "Add" adopts them without recreating.
+- Delete offers "Remove from DevDash" (keeps the container) or "Delete Container" (also deletes it in the engine).
+- Apple's CLI has no restart policy.
+
+### Virtual Machines Module (`Modules/VMManager/`)
+- Reads VMs live from `limactl list --json` and `container machine list --format json`. Stores nothing.
+- Start, stop, delete, and open a shell in Terminal (`TerminalLauncher.open(command:)`).
+- Backup `vms.json` holds each Lima VM's `lima.yaml`.
 
 ### Settings Module & Backup (`Settings/`, `Core/Utilities/BackupManager.swift`)
 - Backs up each module's `exportForBackup()` data, encrypted with `FileEncryption` (AES-256-GCM, PBKDF2 key from a passphrase in Keychain)

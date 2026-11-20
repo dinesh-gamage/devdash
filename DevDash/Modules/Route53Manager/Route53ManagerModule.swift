@@ -80,6 +80,12 @@ struct Route53ManagerSidebarView: View {
             toolbarButtons: [
                 ToolbarButtonConfig(icon: "plus.circle", help: "Add Hosted Zone") {
                     state.showingAddZone = true
+                },
+                ToolbarButtonConfig(icon: "square.and.arrow.down", help: "Import Zones") {
+                    state.manager.importZones()
+                },
+                ToolbarButtonConfig(icon: "square.and.arrow.up", help: "Export Zones") {
+                    state.manager.exportZones()
                 }
             ],
             items: state.manager.zones,

@@ -8,6 +8,7 @@
 import SwiftUI
 
 struct ContainerFormContent: View {
+    @Binding var engine: ContainerEngine
     @Binding var name: String
     @Binding var image: String
     @Binding var ports: [PortMapping]
@@ -27,6 +28,13 @@ struct ContainerFormContent: View {
 
                 // Basic Info
                 FormSection(title: "Basic Info") {
+                    FormField(label: "Engine") {
+                        Picker("", selection: $engine) {
+                            ForEach(ContainerEngine.allCases) { Text($0.hostName).tag($0) }
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                    }
                     FormField(label: "Container Name") {
                         TextField("my-container", text: $name)
                             .textFieldStyle(.roundedBorder)
@@ -132,25 +140,28 @@ struct ContainerFormContent: View {
 
                 // Advanced Options
                 FormSection(title: "Advanced Options") {
-                    FormField(label: "Network", hint: "Docker network name (e.g., bridge, host)") {
+                    FormField(label: "Network", hint: "Network name (e.g., bridge, host). Leave empty for the default.") {
                         TextField("bridge", text: $network)
                             .textFieldStyle(.roundedBorder)
                     }
-                    FormField(label: "Restart Policy") {
-                        Picker("", selection: $restartPolicy) {
-                            Text("No").tag("no")
-                            Text("Always").tag("always")
-                            Text("On Failure").tag("on-failure")
-                            Text("Unless Stopped").tag("unless-stopped")
+                    // Apple's container CLI has no restart policy
+                    if engine == .docker {
+                        FormField(label: "Restart Policy") {
+                            Picker("", selection: $restartPolicy) {
+                                Text("No").tag("no")
+                                Text("Always").tag("always")
+                                Text("On Failure").tag("on-failure")
+                                Text("Unless Stopped").tag("unless-stopped")
+                            }
+                            .pickerStyle(.segmented)
                         }
-                        .pickerStyle(.segmented)
                     }
                     HStack(spacing: 12) {
                         FormField(label: "CPU Limit", hint: "e.g., 1.5") {
                             TextField("1.0", text: $cpuLimit)
                                 .textFieldStyle(.roundedBorder)
                         }
-                        FormField(label: "Memory Limit", hint: "e.g., 512m, 1g") {
+                        FormField(label: "Memory Limit", hint: engine == .docker ? "e.g., 512m, 1g" : "e.g., 512M, 4G") {
                             TextField("512m", text: $memoryLimit)
                                 .textFieldStyle(.roundedBorder)
                         }
@@ -168,7 +179,7 @@ struct ContainerFormContent: View {
                         Image(systemName: "info.circle")
                             .foregroundColor(.secondary)
                             .font(.caption)
-                        Text("Add arbitrary Docker flags (e.g., --privileged, --cap-add SYS_ADMIN)")
+                        Text("Add extra \(engine.cli) create flags (e.g., --privileged, --cap-add SYS_ADMIN)")
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }

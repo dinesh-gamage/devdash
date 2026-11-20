@@ -56,12 +56,17 @@ class TerminalLauncher {
             command += " \(customOptions)"
         }
 
+        try open(command: command)
+    }
+
+    /// Opens Terminal and runs a shell command in a new window.
+    /// On a permission error the command is copied to the clipboard.
+    static func open(command: String) throws {
         // Escape command for AppleScript (escape quotes and backslashes)
         let escapedCommand = command
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
 
-        // AppleScript to open Terminal with the SSH command
         let script = """
         tell application "Terminal"
             activate
@@ -69,28 +74,21 @@ class TerminalLauncher {
         end tell
         """
 
-        // Execute AppleScript
         var error: NSDictionary?
-        if let scriptObject = NSAppleScript(source: script) {
-            scriptObject.executeAndReturnError(&error)
-
-            if let error = error {
-                let errorMessage = error[NSAppleScript.errorMessage] as? String ?? "Unknown error"
-                let errorNumber = error[NSAppleScript.errorNumber] as? Int ?? 0
-
-                // Check for permission denied error (-1743 is "not authorized")
-                if errorNumber == -1743 || errorMessage.contains("not authorized") {
-                    // Copy SSH command to clipboard as fallback
-                    let pasteboard = NSPasteboard.general
-                    pasteboard.clearContents()
-                    pasteboard.setString(command, forType: .string)
-                    throw TerminalLauncherError.permissionDenied
-                }
-
-                throw TerminalLauncherError.scriptExecutionFailed(message: errorMessage)
-            }
-        } else {
+        guard let scriptObject = NSAppleScript(source: script) else {
             throw TerminalLauncherError.scriptExecutionFailed(message: "Failed to create AppleScript")
         }
+        scriptObject.executeAndReturnError(&error)
+        guard let error else { return }
+
+        let errorMessage = error[NSAppleScript.errorMessage] as? String ?? "Unknown error"
+        let errorNumber = error[NSAppleScript.errorNumber] as? Int ?? 0
+        // -1743 is "not authorized". Copy the command so the user can paste it.
+        if errorNumber == -1743 || errorMessage.contains("not authorized") {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(command, forType: .string)
+            throw TerminalLauncherError.permissionDenied
+        }
+        throw TerminalLauncherError.scriptExecutionFailed(message: errorMessage)
     }
 }

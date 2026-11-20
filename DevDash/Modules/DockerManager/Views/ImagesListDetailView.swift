@@ -9,16 +9,19 @@ import SwiftUI
 
 struct ImagesListDetailView: View {
     @ObservedObject var state = DockerManagerState.shared
+    let engine: ContainerEngine
+
+    private var images: [ImageInfo] { state.manager.images[engine] ?? [] }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             // Header
             ModuleDetailHeader(
-                title: "Images",
+                title: "\(engine.hostName) Images",
                 actionButtons: {
                     VariantButton(icon: "arrow.clockwise", variant: .secondary, tooltip: "Refresh") {
                         Task {
-                            await state.manager.refreshImagesList()
+                            await state.manager.refreshImages(engine)
                         }
                     }
                 }
@@ -27,7 +30,9 @@ struct ImagesListDetailView: View {
             Divider()
 
             // Images Table
-            if state.manager.imagesList.isEmpty {
+            if !state.isRunning(engine) {
+                EngineStoppedView(host: state.engineRuntime(engine))
+            } else if images.isEmpty {
                 VStack(spacing: 16) {
                     Image(systemName: "cube")
                         .font(.system(size: 48))
@@ -37,13 +42,13 @@ struct ImagesListDetailView: View {
                         .font(.headline)
                         .foregroundColor(.secondary)
 
-                    Text("No Docker images found")
+                    Text("No images found")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                Table(state.manager.imagesList) {
+                Table(images) {
                     TableColumn("Repository") { image in
                         Text(image.repository)
                             .font(.body)
@@ -83,7 +88,10 @@ struct ImagesListDetailView: View {
             }
         }
         .task {
-            await state.manager.refreshImagesList()
+            await state.manager.refreshImages(engine)
+        }
+        .onChange(of: state.isRunning(engine)) { _, running in
+            if running { Task { await state.manager.refreshImages(engine) } }
         }
     }
 }

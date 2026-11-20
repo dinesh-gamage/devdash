@@ -78,23 +78,28 @@ struct ModuleSidebarListItem: View {
     let badge: Badge?
     let actions: [ListItemAction]
     let isSelected: Bool
+    let indent: CGFloat
     let onTap: () -> Void
 
     @State private var isHovering = false
     @ObservedObject var accentColor = AppTheme.AccentColor.shared
 
-    init(icon: ListItemIcon, title: String, subtitle: String? = nil, badge: Badge? = nil, actions: [ListItemAction] = [], isSelected: Bool, onTap: @escaping () -> Void) {
+    /// - Parameter indent: Extra leading space for a child row (e.g. 20)
+    init(icon: ListItemIcon, title: String, subtitle: String? = nil, badge: Badge? = nil, actions: [ListItemAction] = [], isSelected: Bool, indent: CGFloat = 0, onTap: @escaping () -> Void) {
         self.icon = icon
         self.title = title
         self.subtitle = subtitle
         self.badge = badge
         self.actions = actions
         self.isSelected = isSelected
+        self.indent = indent
         self.onTap = onTap
     }
 
     var body: some View {
         HStack(spacing: 10) {
+            if indent > 0 { Spacer().frame(width: indent) }
+
             // Icon
             switch icon {
             case .status(let color):

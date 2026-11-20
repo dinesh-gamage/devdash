@@ -12,6 +12,7 @@ struct EditContainerView: View {
     @ObservedObject var manager: DockerManager
     let container: ContainerRuntime
 
+    @State private var engine: ContainerEngine
     @State private var name: String
     @State private var image: String
     @State private var ports: [PortMapping]
@@ -29,6 +30,7 @@ struct EditContainerView: View {
         self.manager = manager
         self.container = container
 
+        _engine = State(initialValue: container.config.resolvedEngine)
         _name = State(initialValue: container.config.name)
         _image = State(initialValue: container.config.image)
         _ports = State(initialValue: container.config.ports)
@@ -46,6 +48,7 @@ struct EditContainerView: View {
     var body: some View {
         NavigationStack {
             ContainerFormContent(
+                engine: $engine,
                 name: $name,
                 image: $image,
                 ports: $ports,
@@ -87,7 +90,8 @@ struct EditContainerView: View {
             cpuLimit: cpuLimit.isEmpty ? nil : cpuLimit,
             memoryLimit: memoryLimit.isEmpty ? nil : memoryLimit,
             additionalParams: additionalParams.filter { !$0.flag.isEmpty },
-            maxLogLines: Int(maxLogLines)
+            maxLogLines: Int(maxLogLines),
+            engine: engine
         )
 
         manager.updateContainer(container, with: config)
