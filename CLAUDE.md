@@ -6,8 +6,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 DevDash is a native macOS application built with SwiftUI for managing local development workflows. It provides:
 1. **Service Management** - Start/stop local development services, view logs, track errors/warnings, handle port conflicts
-2. **EC2 Instance IP Tracking** - Fetch and cache public IPs for AWS EC2 instances organized by region/environment groups
+2. **EC2 Management** - Fetch/cache public IPs, restart instances, health checks, SSH terminals and SSH tunnels
 3. **Credentials Management** - Secure credential storage with Apple Keychain and biometric authentication
+4. **AWS Vault Profiles** - Manage aws-vault profiles and cached credential sessions
+5. **Resource Monitor** - System and DevDash CPU/memory/swap/network/disk metrics and top processes
+6. **Storage Manager** - Scan for junk, caches, large/old and duplicate files, then move them to Trash
+7. **Docker Manager** - Manage Colima, Docker containers and images
+8. **Settings** - Encrypted per-module backup to S3 and restore
+9. **Dashboard** - Home screen with count widgets and summary panels from each module
 
 ## Development Rules
 
@@ -29,27 +35,42 @@ DevDash is a native macOS application built with SwiftUI for managing local deve
 The app uses a **module-based architecture** where each feature is an independent, self-contained module:
 
 **Module Protocol** (`Core/Models/Module.swift`):
-- **DevDashModule** (lines 13-25): Protocol defining module interface (id, name, icon, accentColor, sidebar/detail views)
-- **ModuleRegistry** (lines 29-46): Singleton managing module registration and lookup
+- **DevDashModule**: Protocol defining module interface (id, name, icon, description, accentColor, sidebar/detail views)
+  - Backup support: `backupFileName` and `exportForBackup() async throws -> Data` (full data, including secrets)
+- **ModuleRegistry**: Singleton managing module registration and lookup
+- Modules are registered in `DevDashApp.registerModules()`. Each module's `toastQueue` is attached in `ContentView`.
+- `BiometricAuthManager` gates the whole window via `AuthenticationGateView`.
 
-**Current Modules:**
-- **ServiceManagerModule** (`Modules/ServiceManager/`) - Service lifecycle management
-- **EC2ManagerModule** (`Modules/EC2Manager/`) - AWS EC2 instance IP tracking
-- **CredentialsManagerModule** (`Modules/CredentialsManager/`) - Secure credential storage
+**Current Modules** (id in brackets):
+- **ServiceManagerModule** (`service-manager`) - Service lifecycle management
+- **EC2ManagerModule** (`ec2-manager`) - EC2 IPs, restart, health, SSH, tunnels
+- **CredentialsManagerModule** (`credentials-manager`) - Secure credential storage
+- **AWSVaultManagerModule** (`aws-vault-manager`) - aws-vault profiles
+- **ResourceMonitorModule** (`resource-monitor`) - System/DevDash metrics
+- **StorageManagerModule** (`storage-manager`) - Disk cleanup
+- **DockerManagerModule** (`docker-manager`) - Colima, containers, images
+- **SettingsModule** (`settings`) - Backup/restore; shown at the bottom of the sidebar, not in the module list
 
 ### Directory Structure
 ```
 DevDash/
 ├── Core/                     # Shared infrastructure
-│   ├── Models/              # Module protocol, registry
+│   ├── Models/              # Module protocol, registry, backup config/status
 │   ├── Components/          # Reusable UI (buttons, forms, logs, etc.)
 │   ├── Theme/              # AppTheme, typography, colors
-│   ├── Utilities/          # Helpers (LogParser, StorageManager, etc.)
-│   └── Protocols/          # Shared interfaces
+│   ├── Utilities/          # Helpers (LogParser, StorageManager, BackupManager, etc.)
+│   └── Protocols/          # Shared interfaces (OutputViewDataSource)
 ├── Modules/                 # Feature modules
 │   ├── ServiceManager/
-│   └── EC2Manager/
-├── ContentView.swift        # Root navigation
+│   ├── EC2Manager/
+│   ├── CredentialsManager/
+│   ├── AWSVaultManager/
+│   ├── ResourceMonitor/
+│   ├── StorageManager/
+│   └── DockerManager/
+├── Settings/                # Settings module, backup views, storage scan settings view
+├── Views/Dashboard/         # Home dashboard + 12-column grid
+├── ContentView.swift        # Root navigation (module list ↔ module sidebar, dashboard when none selected)
 └── DevDashApp.swift        # App entry + module registration
 ```
 
@@ -91,14 +112,15 @@ Key components in `Modules/EC2Manager/`:
 - **EC2ManagerDetailView**: Detail pane for selected group
 
 **Models/EC2Models.swift**:
-- **EC2Instance**: Instance name, ID, cached IP, last fetch timestamp, fetch error
-- **InstanceGroup**: Regional grouping with AWS profile, region, instances list
+- **EC2Instance**: Instance name, ID, cached IP, last fetch timestamp, fetch error, optional SSHConfig
+- **InstanceGroup**: Regional grouping with AWS profile, region, instances, group SSHConfig, tunnels
+- **SSHConfig / SSHTunnel**: SSH user/key/options; local port forward through a bastion instance
 
 **Managers/InstanceGroupManager.swift**:
-- Manages EC2 groups with aws-vault integration via `aws-vault exec {profile}`
-- Runs `aws ec2 describe-instances` asynchronously (Task.detached)
-- Stores groups in UserDefaults with key "instanceGroups"
-- Default groups: Lucy (ap-southeast-1), Sydney (ap-southeast-2), Canvas (ap-southeast-1)
+- Credentials come from `ProcessEnvironment.getEnvironment(withAWSProfile:region:)` (aws-vault session via `AWSVaultServerManager`)
+- Runs `aws ec2 describe-instances` / stop / start / wait / describe-instance-status asynchronously (Task.detached)
+- Opens SSH terminals (`TerminalLauncher`) and runs tunnels (`Runtime/TunnelRuntime.swift`)
+- Stores groups in UserDefaults with key "instanceGroups" (no default groups)
 
 **Views/**:
 - **InstanceGroupDetailView**: Table showing instance name, ID, cached IP, last fetch time, fetch button
@@ -131,6 +153,37 @@ Key components in `Modules/CredentialsManager/`:
 - **AddCredentialView**: Form for creating new credentials with password confirmation
 - **EditCredentialView**: Form for editing credentials with optional password update
 - **CredentialListItem**: Sidebar item with category icon and metadata
+
+### AWS Vault Manager Module (`Modules/AWSVaultManager/`)
+- **AWSVaultManager**: profile metadata in UserDefaults key "awsVaultProfiles", aws-vault CLI integration, Keychain health check
+- **AWSVaultServerManager** (`Core/Utilities/`): caches `aws-vault exec --json` sessions per profile until expiry; cleared on app quit
+
+### Resource Monitor Module (`Modules/ResourceMonitor/`)
+- **SystemMetricsMonitor**: reads CPU, memory, swap, network, disk via system APIs on a 1s timer
+  - This timer is the one allowed polling exception. It only publishes when values change (`shouldPublish`).
+- Two views: **Overall** (system) and **DevDash** (the app's own processes). Dashboard widgets reuse them.
+
+### Storage Manager Module (`Modules/StorageManager/`)
+- **CleanupManager**: priority-ordered scan with path dedup (system caches, junk, developer tools, trash, downloads, user folders, large/old files, duplicates via MD5)
+- **SafetyDatabase** (actor): allow-list of scan/clean targets and protected paths. All deletes must pass it.
+- **DirectorySizeCalculator** (actor), **FullDiskAccessManager**
+- **StorageScanSettingsManager**: enabled categories, scan locations, ignore patterns, deletion mode
+- SAFETY: `cleanSelected()` always moves to Trash. Permanent delete is disabled on purpose until validated.
+
+### Docker Manager Module (`Modules/DockerManager/`)
+- Sections: Colima, Containers, Images
+- **DockerManager**: container configs in UserDefaults key "containers"; `ContainerRuntime` per container; images via `docker images`
+- **ColimaRuntime**: Colima status/start/stop/restart
+
+### Settings Module & Backup (`Settings/`, `Core/Utilities/BackupManager.swift`)
+- Backs up each module's `exportForBackup()` data, encrypted with `FileEncryption` (AES-256-GCM, PBKDF2 key from a passphrase in Keychain)
+- Uploads with `aws-vault exec {profile} -- aws s3 cp` to the configured bucket/path; restore downloads and decrypts
+- Config in UserDefaults key "backupConfig", last status in "lastBackupStatus"
+- New modules MUST implement `backupFileName` and `exportForBackup()`
+
+### Dashboard (`Views/Dashboard/`)
+- `DashboardView` shows when no module is selected. It uses a 12-column `DashboardGrid`.
+- Row 1: count widgets. Row 2: Service, EC2 and Resource Monitor panels. Tapping one opens its module.
 
 ### Event-Driven Architecture & State Management
 
@@ -430,6 +483,10 @@ Before committing any state management changes:
 
 ### Core Infrastructure
 
+**Shell commands** (all modules):
+- Run via `Process` with `/bin/zsh -c` (or `-l -c`) on a background task, never on the main thread
+- Environment comes from `ProcessEnvironment.shared.getEnvironment(...)`. Use `withAWSProfile:region:` for AWS calls.
+
 **Process Management** (ServiceRuntime):
 - Services run as `/bin/zsh` processes
 - Streams stdout/stderr via Pipe with live readability handler
@@ -449,6 +506,10 @@ Before committing any state management changes:
 - **ErrorWarningListView**: Shared error/warning list display
 - **ModuleDetailHeader**: Standard header for module detail views
 - **ModuleSidebarList**: Reusable sidebar list with toolbar
+- **CommandOutputView / OutputSlideOver**: Show a command's output log (`CommandOutputViewModel`)
+- **DashboardCard, StatCard**: Dashboard widget building blocks
+- **AuthenticationGateView**: Biometric lock screen
+- **PlainTextEditor**: NSTextView wrapper without smart quotes
 
 **Utilities** (`Core/Utilities/`):
 - **LogParser**: Real-time error/warning detection with pattern matching
@@ -467,10 +528,10 @@ Before committing any state management changes:
   - Touch ID/Face ID/Password authentication
   - Session-based authentication caching
   - Session invalidation on app background/terminate
-- **AWSVaultManager**: AWS vault profile management
-  - Profile metadata storage (name, region, description)
-  - Shell integration with aws-vault CLI
-  - Async credential operations
+- **AWSVaultServerManager**: Cached aws-vault credential sessions per profile
+- **ToastQueue**: Sequential toast messages (one per module state, attached in `ContentView`)
+- **BackupManager / FileEncryption**: Encrypted S3 backup and restore
+- **TerminalLauncher**: Opens commands (e.g. SSH) in Terminal
 
 **Theme System** (`Core/Theme/AppTheme.swift`):
 - Centralized typography (h1, h2, h3, body, caption)
@@ -490,14 +551,17 @@ This is a standard Xcode project. No build scripts, tests, or linters are config
 
 **Build & Run:**
 Open `DevDash.xcodeproj` in Xcode and use Cmd+R to build and run.
+Command line build: `xcodebuild -project DevDash.xcodeproj -scheme DevDash build`
 
 **Platform:**
 macOS only (uses AppKit for file panels)
 
 **Requirements:**
-- macOS 13.0+ (Ventura)
+- macOS 26.2+ (deployment target in the project)
 - aws-vault installed and configured with profiles
 - AWS CLI v2 installed
+- Docker CLI + Colima (Docker Manager only)
+- Full Disk Access (Storage Manager only, for a complete scan)
 
 ## Data Storage
 
@@ -507,7 +571,11 @@ macOS only (uses AppKit for file panels)
 
 **EC2 Instance Groups:**
 - Persisted to `UserDefaults` with key "instanceGroups" as JSON-encoded array of `InstanceGroup`
-- Default groups auto-created on first launch: Lucy, Sydney, Canvas
+
+**Other UserDefaults keys** (all via `StorageManager.shared`, JSON-encoded arrays):
+- "awsVaultProfiles", "containers", "backupConfig", "lastBackupStatus"
+- Credentials metadata in UserDefaults. Passwords and secret fields in Keychain.
+- Storage scan settings via `StorageScanSettingsManager`
 
 ## Key Behaviors
 
