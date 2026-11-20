@@ -64,7 +64,14 @@ class InstanceGroupManager: ObservableObject {
     func fetchInstanceIP(group: InstanceGroup, instance: EC2Instance) {
         // Cancel existing fetch task for this instance
         fetchTasks[instance.id]?.cancel()
+        fetchTasks[instance.id] = Task {
+            _ = await refreshPublicIP(group: group, instance: instance)
+        }
+    }
 
+    /// Fetch the instance's current public IP, update the cached IP and output log, and return the result.
+    /// Shared by the EC2 fetch button and the Route 53 module.
+    func refreshPublicIP(group: InstanceGroup, instance: EC2Instance) async -> (ip: String?, error: String?) {
         // Clear previous error immediately
         if let groupIndex = groups.firstIndex(where: { $0.id == group.id }),
            let instanceIndex = groups[groupIndex].instances.firstIndex(where: { $0.id == instance.id }) {
@@ -72,6 +79,10 @@ class InstanceGroupManager: ObservableObject {
         }
 
         isFetching[instance.id] = true
+        defer {
+            isFetching[instance.id] = false
+            fetchTasks.removeValue(forKey: instance.id)
+        }
 
         // Create or get output view model for this instance
         let outputViewModel = instanceOutputs[instance.id] ?? CommandOutputViewModel()
@@ -79,86 +90,30 @@ class InstanceGroupManager: ObservableObject {
             instanceOutputs[instance.id] = outputViewModel
         }
 
-        let task = Task.detached(priority: .userInitiated) {
-            // Get AWS environment with credentials from vault session
-            let environment = await ProcessEnvironment.shared.getEnvironment(withAWSProfile: group.awsProfile, region: group.region)
+        // Get AWS environment with credentials from vault session
+        let environment = await ProcessEnvironment.shared.getEnvironment(withAWSProfile: group.awsProfile, region: group.region)
+        let args = ["ec2", "describe-instances", "--instance-ids", instance.instanceId, "--region", group.region,
+                    "--query", "Reservations[0].Instances[0].PublicIpAddress", "--output", "text"]
+        let result = await ShellCommand.run("aws", args, env: environment)
 
-            let command = "aws ec2 describe-instances --instance-ids \(instance.instanceId) --region \(group.region) --query 'Reservations[0].Instances[0].PublicIpAddress' --output text"
+        guard !Task.isCancelled else { return (nil, "Cancelled") }
 
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-            process.arguments = ["-c", command]
-            process.environment = environment
+        outputViewModel.setLogs(ShellCommand.log("aws", args, result))
 
-            let outputPipe = Pipe()
-            let errorPipe = Pipe()
-            process.standardOutput = outputPipe
-            process.standardError = errorPipe
-
-            do {
-                try process.run()
-                process.waitUntilExit()
-
-                // Check if task was cancelled
-                guard !Task.isCancelled else {
-                    await MainActor.run {
-                        self.isFetching[instance.id] = false
-                        self.fetchTasks.removeValue(forKey: instance.id)
-                    }
-                    return
-                }
-
-                let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
-                let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
-
-                let output = String(data: outputData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                let errorOutput = String(data: errorData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-
-                let exitCode = process.terminationStatus
-
-                // Build full output log
-                var fullLog = "[Command] \(command)\n\n"
-                fullLog += "[Exit Code] \(exitCode)\n\n"
-                if !output.isEmpty {
-                    fullLog += "[STDOUT]\n\(output)\n\n"
-                }
-                if !errorOutput.isEmpty {
-                    fullLog += "[STDERR]\n\(errorOutput)\n"
-                }
-
-                await MainActor.run {
-                    // Update output view model with full log
-                    outputViewModel.setLogs(fullLog)
-
-                    if exitCode == 0 && !output.isEmpty && output != "None" {
-                        // Success - got valid IP
-                        self.updateInstance(group.id, instanceId: instance.id, ip: output, fetchedDate: Date(), error: nil)
-                    } else if !errorOutput.isEmpty {
-                        // Error occurred
-                        self.updateInstance(group.id, instanceId: instance.id, ip: nil, fetchedDate: Date(), error: errorOutput)
-                    } else if output == "None" || output.isEmpty {
-                        // No IP available but command succeeded
-                        self.updateInstance(group.id, instanceId: instance.id, ip: nil, fetchedDate: Date(), error: "No public IP assigned")
-                    } else {
-                        // Unknown error
-                        self.updateInstance(group.id, instanceId: instance.id, ip: nil, fetchedDate: Date(), error: "Failed to fetch IP")
-                    }
-                    self.isFetching[instance.id] = false
-                    self.fetchTasks.removeValue(forKey: instance.id)
-                }
-            } catch {
-                let errorLog = "[Command] \(command)\n\n[Error] \(error.localizedDescription)\n"
-                await MainActor.run {
-                    outputViewModel.setLogs(errorLog)
-                    self.updateInstance(group.id, instanceId: instance.id, ip: nil, fetchedDate: Date(), error: "Process error: \(error.localizedDescription)")
-                    self.isFetching[instance.id] = false
-                    self.fetchTasks.removeValue(forKey: instance.id)
-                }
-            }
+        let ip: String?
+        let error: String?
+        if result.exitCode == 0 && !result.stdout.isEmpty && result.stdout != "None" {
+            (ip, error) = (result.stdout, nil)
+        } else if !result.stderr.isEmpty {
+            (ip, error) = (nil, result.stderr)
+        } else if result.exitCode == 0 {
+            (ip, error) = (nil, "No public IP assigned")
+        } else {
+            (ip, error) = (nil, "Failed to fetch IP")
         }
 
-        // Store task for cancellation
-        fetchTasks[instance.id] = task
+        updateInstance(group.id, instanceId: instance.id, ip: ip, fetchedDate: Date(), error: error)
+        return (ip, error)
     }
 
     func restartInstance(group: InstanceGroup, instance: EC2Instance) {

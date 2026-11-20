@@ -53,6 +53,9 @@ struct DevDashApp: App {
         // Register EC2 Manager module
         registry.register(EC2ManagerModule())
 
+        // Register Route 53 Records module
+        registry.register(Route53ManagerModule())
+
         // Register Credentials Manager module
         registry.register(CredentialsManagerModule())
 

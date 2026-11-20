@@ -15,6 +15,7 @@ struct ContentView: View {
     // Module toast queues
     @ObservedObject var serviceToastQueue = ServiceManagerState.shared.toastQueue
     @ObservedObject var ec2ToastQueue = EC2ManagerState.shared.toastQueue
+    @ObservedObject var route53ToastQueue = Route53ManagerState.shared.toastQueue
     @ObservedObject var credentialsToastQueue = CredentialsManagerState.shared.toastQueue
     @ObservedObject var awsVaultToastQueue = AWSVaultManagerState.shared.toastQueue
     @ObservedObject var settingsToastQueue = SettingsState.shared.toastQueue
@@ -182,6 +183,7 @@ struct ContentView: View {
         }
         .toastQueue(serviceToastQueue)
         .toastQueue(ec2ToastQueue)
+        .toastQueue(route53ToastQueue)
         .toastQueue(credentialsToastQueue)
         .toastQueue(awsVaultToastQueue)
         .toastQueue(settingsToastQueue)

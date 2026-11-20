@@ -154,6 +154,14 @@ Key components in `Modules/CredentialsManager/`:
 - **EditCredentialView**: Form for editing credentials with optional password update
 - **CredentialListItem**: Sidebar item with category icon and metadata
 
+### Route 53 Records Module (`Modules/Route53Manager/`)
+- Keeps hand-picked A records (e.g. `*.v5.lucyday.io`) pointed at the right IP. Never lists or touches other records in a zone.
+- **HostedZone** (name, zone ID, aws-vault profile) holds **DNSRecord**s. A record can link to an EC2 Manager instance (`InstanceLink`).
+- Update flow: validate IPv4, then read the live record (`list-resource-record-sets`), then confirm old → new, then UPSERT keeping the live TTL.
+  - Refuses to create missing records and does not support alias records.
+- "Update from EC2" calls `InstanceGroupManager.refreshPublicIP`, which also refreshes the EC2 module's cached IP.
+- UserDefaults keys "route53Zones" and "route53ChangeLog" (newest 500 entries). The backup file is `route53.json`.
+
 ### AWS Vault Manager Module (`Modules/AWSVaultManager/`)
 - **AWSVaultManager**: profile metadata in UserDefaults key "awsVaultProfiles", aws-vault CLI integration, Keychain health check
 - **AWSVaultServerManager** (`Core/Utilities/`): caches `aws-vault exec --json` sessions per profile until expiry; cleared on app quit
@@ -486,6 +494,7 @@ Before committing any state management changes:
 **Shell commands** (all modules):
 - Run via `Process` with `/bin/zsh -c` (or `-l -c`) on a background task, never on the main thread
 - Environment comes from `ProcessEnvironment.shared.getEnvironment(...)`. Use `withAWSProfile:region:` for AWS calls.
+- For new code, prefer `ShellCommand.run(tool, args, env:)` (`Core/Utilities/ShellCommand.swift`). It takes an argument array with no shell, so user input can't inject commands.
 
 **Process Management** (ServiceRuntime):
 - Services run as `/bin/zsh` processes
